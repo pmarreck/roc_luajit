@@ -1,0 +1,24 @@
+# Demo apps: one entry .roc per line, relative to this directory; arguments,
+# if any, in a sibling <entry>.args file.
+# Source: https://github.com/roc-lang/examples (commit aec3a4f), CC0 1.0 (LICENSE).
+# The headerless (default platform) subset; other examples need platforms
+# without a LuaJIT host yet.
+# expect_scripts/: upstream's ci_scripts/expect_scripts for 13 of these, unchanged
+# (run by luajit_backend/tests/demo_expect).
+AllSyntax/main.roc
+BasicDict/BasicDict.roc
+CommandLineArgs/main.roc
+CustomInspect/OpaqueTypes.roc
+EncodeDecode/main.roc
+ErrorHandlingBasic/ErrorHandlingBasic.roc
+FizzBuzz/main.roc
+HelloWorld/main.roc
+ImportFromDirectory/main.roc
+IngestFiles/main.roc
+Json/main.roc
+LeastSquares/main.roc
+MultipleRocFiles/main.roc
+PatternMatching/PatternMatching.roc
+SafeMath/main.roc
+TryOperatorDesugaring/main.roc
+Tuples/main.roc

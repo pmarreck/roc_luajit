@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Runs performance-profile (from the dev shell; flake input
+# performance-profiling) for this project: checks the tools the adapter
+# needs, pins this shell's LuaJIT for the adapter (the engine's wrapper puts
+# its own LuaJIT first on PATH) and defaults the history URL. A missing
+# engine is an error, never a pass.
+set -u
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+command -v performance-profile >/dev/null || { echo "performance-profile not on PATH; run inside the dev shell (nix develop -c ...)" >&2; exit 1; }
+luajit_bin="$(command -v luajit)" || { echo "luajit not on PATH; run inside the dev shell (nix develop -c ...)" >&2; exit 1; }
+"$luajit_bin" -e 'require("luv") require("cjson")' 2>/dev/null || { echo "$luajit_bin lacks luv or cjson; run inside the dev shell" >&2; exit 1; }
+[ -x "$root/zig-out/bin/roc" ] || { echo "build roc first (zig build roc)" >&2; exit 1; }
+export ROC_LUAJIT_PROFILE_LUAJIT="$luajit_bin"
+export PERFORMANCE_HISTORY_URL="${PERFORMANCE_HISTORY_URL:-file://$HOME/.local/state/performance-history}"
+cd "$root" || exit 1
+exec performance-profile "$@" --config "$root/profiling.json"

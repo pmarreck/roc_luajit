@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Replay the upstream builtin vectors (zig-out/bin/luajit-numeric-vectors)
+# through numeric_vectors.lua in parallel shards. Vectors are independent
+# lines, dealt round-robin into ROC_LUAJIT_JOBS shards (default: every CPU,
+# at most 64). Fails if any shard fails or the shards' vector counts do not
+# add up to the vectors generated, so a lost shard cannot pass silently.
+# Every vector is replayed twice: with I64/U64 operands as cdata and in the
+# mixed representation (numbers below 2^53, ROC_LUAJIT_INT64_REPR=mixed).
+#
+# Usage: numeric_vectors_parallel [GENERATOR]
+set -u
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+gen="${1:-$here/../../zig-out/bin/luajit-numeric-vectors}"
+jobs="${ROC_LUAJIT_JOBS:-$(nproc)}"
+[ "$jobs" -gt 64 ] && jobs=64
+work="$(mktemp -d "${TMPDIR:-/tmp}/numeric_vectors.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+if ! "$gen" >"$work/all"; then
+	echo "numeric_vectors_parallel: generator failed"
+	exit 1
+fi
+(cd "$work" && split -n "r/$jobs" -d -a 3 all shard.)
+for mode in cdata mixed; do
+	ls "$work" | grep '^shard\.[0-9]*$' | xargs -P "$jobs" -I{} sh -c 'ROC_LUAJIT_INT64_REPR=$4 luajit "$1" "$2/$3" >"$2/$3.$4.out" 2>"$2/$3.$4.err"; echo $? >"$2/$3.$4.rc"' _ "$here/numeric_vectors.lua" "$work" {} "$mode"
+done
+
+status=0 total=0 failed=0
+for rc in $(ls "$work" | grep '\.rc$'); do
+	shard="${rc%.rc}" # shard.NNN.MODE
+	if [ "$(cat "$work/$rc")" != 0 ]; then
+		status=1
+		head -20 "$work/$shard.err"
+	fi
+	read -r n f < <(sed -n 's/^numeric_vectors: \([0-9]*\) vectors over [0-9]* ops, \([0-9]*\) failed$/\1 \2/p' "$work/$shard.out")
+	total=$((total + ${n:-0}))
+	failed=$((failed + ${f:-0}))
+done
+generated="$(grep -c . "$work/all")"
+echo "numeric_vectors_parallel: $total vectors in $jobs shards x 2 representations, $failed failed (generated $generated lines)"
+if [ "$total" -eq 0 ] || [ "$total" -ne $((2 * generated)) ]; then
+	echo "numeric_vectors_parallel: replayed vector count differs from the generated lines"
+	status=1
+fi
+exit "$status"

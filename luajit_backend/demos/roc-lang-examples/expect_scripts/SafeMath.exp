@@ -1,0 +1,20 @@
+#!/usr/bin/expect
+
+# uncomment line below for debugging
+# exp_internal 1
+
+set timeout 7
+
+source ./ci_scripts/expect_scripts/shared-code.exp
+
+spawn ./examples/SafeMath/main
+
+
+expect "σ² = 147.666666666666666666\r\n" {
+    expect eof {
+        check_exit_and_segfault
+    }
+}
+
+puts stderr "\nError: output was different from expected value."
+exit 1

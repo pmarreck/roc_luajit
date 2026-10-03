@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Measures one program (any command) N times and prints medians of user-mode
+# instructions (perf), wall seconds and peak RSS in KiB (GNU time). LuaJIT's
+# randomized trace-abort penalties make single runs vary by about 20%, so
+# compare medians of 15 or more runs.
+#
+# --json prints {"instructions", "instructions_min", "wall_s", "rss_kib",
+# "runs"} instead.
+#
+# Usage: luajit_backend/bench/measure [--runs=N] [--json] -- CMD [ARGS...]
+set -u
+runs=15
+json=false
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--runs=*) runs="${1#--runs=}"; shift ;;
+		--json) json=true; shift ;;
+		--) shift; break ;;
+		*) break ;;
+	esac
+done
+perf="${PERF:-$(command -v perf || echo /nix/store/4abhg06h0n7vr1l94kkiifbf3ayzj74r-perf-linux-7.2.8/bin/perf)}"
+gtime="${GNU_TIME:-/run/current-system/sw/bin/time}"
+out="$(mktemp -d "${TMPDIR:-/tmp}/measure.XXXXXX")"
+trap 'rm -rf "$out"' EXIT
+for i in $(seq 1 "$runs"); do
+	"$perf" stat -x, -e instructions:u -o "$out/perf" -- "$gtime" -f '%e %M' -o "$out/time" "$@" >/dev/null 2>&1 || { echo "run $i failed: $*" >&2; exit 1; }
+	ins="$(cut -d, -f1 "$out/perf" | grep -E '^[0-9]+$' | head -1)"
+	echo "$ins $(cat "$out/time")" >> "$out/rows"
+done
+med() { sort -n | awk '{ a[NR] = $1 } END { print (NR % 2) ? a[(NR + 1) / 2] : (a[NR / 2] + a[NR / 2 + 1]) / 2 }'; }
+ins_med="$(cut -d' ' -f1 "$out/rows" | med)"
+wall_med="$(cut -d' ' -f2 "$out/rows" | med)"
+rss_med="$(cut -d' ' -f3 "$out/rows" | med)"
+if [ "$json" = true ]; then
+	ins_min="$(cut -d' ' -f1 "$out/rows" | sort -n | head -1)"
+	printf '{"instructions":%s,"instructions_min":%s,"wall_s":%s,"rss_kib":%s,"runs":%d}\n' "$ins_med" "$ins_min" "$wall_med" "$rss_med" "$runs"
+	exit 0
+fi
+printf 'instructions %.3fG  wall %.3fs  rss %d KiB  (median of %d)\n' \
+	"$(cut -d' ' -f1 "$out/rows" | med | awk '{ print $1 / 1e9 }')" \
+	"$(cut -d' ' -f2 "$out/rows" | med)" \
+	"$(cut -d' ' -f3 "$out/rows" | med)" "$runs"

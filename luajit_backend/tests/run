@@ -1,0 +1,126 @@
+	local n
+	wait
+#!/usr/bin/env bash
+# LuaJIT backend suite: runs every test under luajit_backend/tests plus the
+# differential runner and its negative controls, and exits with the number of
+# failing entries. Output of passing entries is kept short; a failing entry's
+# full output is shown. Expects the project dev shell (./test-all provides it).
+#
+# The three Zig builds run concurrently, each in its own CPU window (Zig
+# compilers see at most ROC_LUAJIT_ZIG_CPUS CPUs, see zig_cpu_cap.bash); the
+# runtime checks after them are not Zig compilations and each spreads over
+# every CPU (ROC_LUAJIT_JOBS, default: all).
+set -u
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+source "$root/luajit_backend/scripts/zig_cpu_cap.bash"
+cpus_a="$(zig_cpu_window 0)" || exit 2
+cpus_b="$(zig_cpu_window 1)" || exit 2
+cpus_c="$(zig_cpu_window 2)" || exit 2
+ratchet="$(cat "$here/unsupported_ratchet")"
+echo_ratchet="$(cat "$here/echo_unsupported_ratchet")"
+fx_ratchet="$(cat "$here/fx_unsupported_ratchet")"
+basic_cli_ratchet="$(cat "$here/basic_cli_unsupported_ratchet")"
+jobs="${ROC_LUAJIT_JOBS:-$(nproc)}"
+threads="${ROC_LUAJIT_DIFF_THREADS:-$jobs}"
+export ROC_LUAJIT_JOBS="$jobs"
+failures=0
+results="$(mktemp -d "${TMPDIR:-/tmp}/luajit_suite.XXXXXX")"
+trap 'rm -rf "$results"' EXIT
+
+# Seconds since an $EPOCHREALTIME stamp.
+elapsed() { awk -v a="$1" -v b="$EPOCHREALTIME" 'BEGIN { print b - a }'; }
+
+run_one() { # label command...
+	local label="$1"
+	shift
+	local output start=$EPOCHREALTIME
+	if output="$("$@" 2>&1)"; then
+		printf "PASS %s (%.1f s)\n" "$label" "$(elapsed "$start")"
+	else
+		printf "FAIL %s (%.1f s)\n%s\n" "$label" "$(elapsed "$start")" "$output"
+		failures=$((failures + 1))
+	fi
+}
+
+# Concurrent entries: each writes its report to a file; `join_all` prints
+# them in start order and counts failures.
+started=()
+start_one() { # label command...
+	local n="${#started[@]}"
+	started+=("$1")
+	(run_one "$@" >"$results/$n.out"; exit "$failures") &
+}
+join_all() {
+	local n
+	wait
+	for n in "${!started[@]}"; do
+		if [ ! -s "$results/$n.out" ]; then
+			printf 'FAIL %s (no report)\n' "${started[$n]}"
+			failures=$((failures + 1))
+			continue
+		fi
+		cat "$results/$n.out"
+		if grep -q '^FAIL ' "$results/$n.out"; then failures=$((failures + 1)); fi
+	done
+	started=()
+}
+
+cd "$root" || exit 1
+run_one "toolchain.lua" luajit "$here/toolchain.lua"
+run_one "runtime_integers.lua" luajit "$here/runtime_integers.lua"
+run_one "list_flat.lua (flat element storage vs one table per element)" luajit "$here/list_flat.lua"
+run_one "lua_platform_core.lua (Lua platform codec and ops, recording adapters)" luajit "$here/lua_platform_core.lua"
+run_one "profile_adapter.lua (performance-profile adapter core: verification, rows, GC residuals)" luajit "$here/profile_adapter.lua"
+run_one "./cg (input-growth gates against approved history)" "$root/cg"
+run_one "./mg (allocation growth and cleanup gates against approved history)" "$root/mg"
+run_one "netns_run (private network for tests that reach servers)" "$here/netns_run"
+run_one "helper_servers (basic-cli test servers, in a private network)" "$here/helper_servers"
+run_one "pty_run (basic-cli pty cases on a pseudo-terminal)" "$here/pty_run"
+run_one "runtime_strings.lua" luajit "$here/runtime_strings.lua"
+run_one "runtime tail calls (single-valued callees use return (f(...)))" \
+	luajit "$root/luajit_backend/scripts/tail_calls.lua" "$root/src/backend/lua" --check
+run_one "tail_calls cycle fixture (mutual tail calls classified together)" "$here/tail_calls_cycle"
+run_one "cli/wrappers.bash" "$here/cli/wrappers.bash"
+# Hosts are embedded as text; a host LuaJIT cannot compile (for example one
+# over the 60-upvalue limit) would otherwise only fail when a program runs.
+mapfile -t host_files < <(find "$root/src/backend/lua/hosts" -maxdepth 1 -name '*.lua' | sort; echo "$root/test/fx/platform/host.lua")
+run_one "hosts compile under LuaJIT (${#host_files[@]} files)" bash -c 'for f; do luajit -bl "$f" >/dev/null || exit 1; done' _ "${host_files[@]}"
+
+start_one "upstream fast lints (format, lints, tidy, unused-suppression) [CPUs $cpus_a]" \
+	taskset -c "$cpus_a" zig build run-check-zig-format run-check-zig-lints run-check-tidy run-check-unused-suppression
+start_one "build test tools [CPUs $cpus_b]" taskset -c "$cpus_b" zig build build-test-luajit-differential
+start_one "build roc (Debug) [CPUs $cpus_c]" taskset -c "$cpus_c" zig build roc -Doptimize=Debug
+join_all
+
+run_one "numeric_vectors (upstream builtin vectors, parallel shards)" "$here/numeric_vectors_parallel"
+differential="$root/zig-out/bin/luajit-differential-runner"
+run_one "differential (max-unsupported=$ratchet, $threads workers)" \
+	"$differential" --threads "$threads" "max-unsupported=$ratchet"
+run_one "differential negative control" \
+	"$differential" --threads "$threads" --filter "typed simple lambda increment" mutate=int-literals expect-divergence
+run_one "differential negative control (Dec literals)" \
+	"$differential" --threads "$threads" --filter "decimal addition" mutate=dec-literals expect-divergence
+run_one "emitted_layout (frame slots, segment order, traced loops)" "$here/emitted_layout"
+run_one "lua_platform_conformance (Lua platform apps, native vs LuaJIT)" "$here/lua_platform_conformance"
+run_one "alloc_budget (bytes per operation, GC stopped)" "$here/alloc_budget"
+run_one "echo_conformance (max-unsupported=$echo_ratchet)" "$here/echo_conformance" "max-unsupported=$echo_ratchet"
+run_one "fx_conformance (max-unsupported=$fx_ratchet)" "$here/fx_conformance" "max-unsupported=$fx_ratchet"
+run_one "fx_host_flags (host self-test and unknown flags vs host.zig)" "$here/fx_host_flags"
+demos="$root/luajit_backend/demos/roc-lang-examples"
+mapfile -t demo_files < <(grep -v '^#' "$demos/MANIFEST" | sed "s#^#$demos/#")
+run_one "demo_conformance (roc-lang/examples, ${#demo_files[@]} apps)" \
+	"$here/echo_conformance" max-unsupported=0 max-skipped=0 "${demo_files[@]}"
+expect_scripts="$(ls "$demos/expect_scripts" | grep -vc '^shared-code\.exp$')"
+run_one "demo_expect (roc-lang/examples' expect scripts, $expect_scripts apps)" "$here/demo_expect"
+# A roc whose programs print the wrong text must fail every expect script.
+all_fail() { "$@" >/dev/null 2>&1; [ $? -eq "$expect_scripts" ]; }
+run_one "demo_expect negative control" all_fail "$here/demo_expect" "$here/fake_roc_wrong_output"
+run_one "basic_cli_conformance (basic-cli 0.23.0 examples, max-unsupported=$basic_cli_ratchet)" \
+	"$here/basic_cli_conformance" "max-unsupported=$basic_cli_ratchet"
+run_one "exercism_conformance (Exercism Roc track, $(grep -vc '^#' "$root/luajit_backend/demos/exercism/MANIFEST") exercises)" \
+	"$here/exercism_conformance"
+
+echo "luajit_backend: $failures failing entr$([ "$failures" -eq 1 ] && echo y || echo ies)"
+exit "$failures"

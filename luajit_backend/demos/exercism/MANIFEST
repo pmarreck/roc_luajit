@@ -1,0 +1,129 @@
+# Exercism Roc track exercises run by luajit_backend/tests/exercism_conformance.
+# Source: github.com/exercism/roc @ fc59514f08580ea6f358789e5beec131224d8c97 (MIT, see LICENSE):
+# each directory holds the exercise's test file and its .meta example solution.
+# One exercise per line; a commented line names an exercise left out and why.
+accumulate
+acronym
+affine-cipher
+allergies
+all-your-base
+# alphametics: slow: 34 s natively with --opt=dev, 67 s on LuaJIT (outputs agree)
+# anagram: needs a URL package (network at build time)
+armstrong-numbers
+atbash-cipher
+binary
+binary-search
+binary-search-tree
+bob
+bottle-song
+bowling
+change
+circular-buffer
+clock
+collatz-conjecture
+complex-numbers
+connect
+crypto-square
+custom-set
+darts
+diamond
+difference-of-squares
+# dnd-character: needs a URL package (network at build time)
+dominoes
+# dot-dsl: the compiler panics before code generation, natively too
+eliuds-eggs
+error-handling
+etl
+flatten-array
+flower-field
+food-chain
+# forth: the compiler panics before code generation, natively too
+game-of-life
+# gigasecond: needs a URL package (network at build time)
+# go-counting: the compiler panics before code generation, natively too
+grade-school
+grains
+grep
+hamming
+hello-world
+hexadecimal
+high-scores
+house
+isbn-verifier
+isogram
+killer-sudoku-helper
+kindergarten-garden
+knapsack
+largest-series-product
+leap
+line-up
+list-ops
+luhn
+matching-brackets
+matrix
+# meetup: needs a URL package (network at build time)
+# micro-blog: needs a URL package (network at build time)
+minesweeper
+nth-prime
+nucleotide-count
+ocr-numbers
+octal
+palindrome-products
+pangram
+pascals-triangle
+perfect-numbers
+phone-number
+piecing-it-together
+pig-latin
+poker
+pov
+prime-factors
+protein-translation
+proverb
+pythagorean-triplet
+queen-attack
+rail-fence-cipher
+raindrops
+rational-numbers
+rectangles
+resistor-color
+resistor-color-duo
+resistor-color-trio
+rest-api
+# reverse-string: needs a URL package (network at build time)
+rna-transcription
+# robot-name: needs a URL package (network at build time)
+robot-simulator
+roman-numerals
+rotational-cipher
+run-length-encoding
+saddle-points
+save-the-cow
+say
+scrabble-score
+secret-handshake
+series
+# sgf-parsing: needs a URL package (network at build time)
+sieve
+# simple-cipher: needs a URL package (network at build time)
+simple-linked-list
+space-age
+spiral-matrix
+square-root
+state-of-tic-tac-toe
+strain
+sublist
+sum-of-multiples
+tournament
+transpose
+triangle
+twelve-days
+# two-bucket: the compiler panics before code generation, natively too
+two-fer
+variable-length-quantity
+word-count
+word-search
+wordy
+yacht
+zebra-puzzle
+# zipper: the compiler panics before code generation, natively too

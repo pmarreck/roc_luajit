@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Run a command while one of basic-cli's helper servers (scripts/helper_server)
+# listens, as upstream's scripts/test.py does: start the helper, wait up to 5 s
+# for its port to accept connections, run the command, stop the helper. Exits
+# with the command's status. Meant to run inside scripts/netns_run.
+#
+# Usage: with_helper tcp|http|dns COMMAND [ARG...]
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "${1-}" in
+	tcp) port=8085 ;;
+	http) port=9000 ;;
+	dns) port=53 ;;
+	*) echo "with_helper: unknown helper '${1-}'" >&2; exit 2 ;;
+esac
+"$here/helper_server" "$1" </dev/null >/dev/null 2>&1 &
+helper=$!
+shift
+ready=0
+for _ in $(seq 1 100); do
+	kill -0 "$helper" 2>/dev/null || { echo "with_helper: helper server exited early" >&2; exit 2; }
+	if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then ready=1; break; fi
+	sleep 0.05
+done
+if [ "$ready" -ne 1 ]; then
+	kill "$helper" 2>/dev/null
+	echo "with_helper: helper server did not listen on port $port" >&2
+	exit 2
+fi
+"$@"
+status=$?
+kill "$helper" 2>/dev/null
+wait "$helper" 2>/dev/null
+exit "$status"

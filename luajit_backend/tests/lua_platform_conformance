@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# The Lua platform (luajit_backend/platforms/lua) built both ways: every app
+# in tests/lua_platform/apps is built natively (--opt=dev, linking the native
+# host, rebuilt here when its sources are newer) and for LuaJIT, run with the
+# same arguments, environment and stdin, and must agree on stdout, stderr and
+# exit status, which must be the app's expected one (<name>.status, else 0). Both builds run every effect through the platform's host.lua.
+# Usage: lua_platform_conformance [ROC]
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+roc="${1:-$root/zig-out/bin/roc}"
+platform="$root/luajit_backend/platforms/lua"
+work="$(mktemp -d "${TMPDIR:-/tmp}/lua_platform_conformance.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+status=0
+
+host="$platform/targets/x64musl/libhost.a"
+if [ ! -e "$host" ] || [ "$platform/host.zig" -nt "$host" ] || [ "$platform/host.lua" -nt "$host" ]; then
+	if ! "$platform/build-host" >"$work/host.log" 2>&1; then
+		echo "lua_platform_conformance: building the native host failed"
+		sed 's/^/    /' "$work/host.log" | head -20
+		exit 1
+	fi
+fi
+
+luajit_bin="$(command -v luajit)"
+for app in "$here/lua_platform/apps/"*.roc; do
+	name="$(basename "$app" .roc)"
+	d="$work/$name"
+	mkdir -p "$d"
+	if ! "$roc" build --opt=dev --no-cache "$app" --output="$d/native" >"$d/nb.log" 2>&1; then
+		echo "  $name: native build failed"; sed 's/^/    /' "$d/nb.log" | tail -15; status=1; continue
+	fi
+	if ! "$roc" build --target=luajit --no-cache "$app" --output="$d/app.lua" >"$d/lb.log" 2>&1; then
+		echo "  $name: LuaJIT build failed"; sed 's/^/    /' "$d/lb.log" | tail -15; status=1; continue
+	fi
+	for kind in native luajit; do
+		if [ "$kind" = native ]; then cmd=("$d/native"); else cmd=("$luajit_bin" "$d/app.lua"); fi
+		(cd "$d" && printf 'first line\nsecond ✓\n' | env LUA_PLATFORM_TEST=set "${cmd[@]}" a 'b c' >"$d/$kind.out" 2>"$d/$kind.err"; echo $? >"$d/$kind.status")
+	done
+	for part in out err status; do
+		if ! cmp -s "$d/native.$part" "$d/luajit.$part"; then
+			echo "  $name: $part differs (native vs LuaJIT)"
+			diff "$d/native.$part" "$d/luajit.$part" | head -10 | sed 's/^/    /'
+			status=1
+		fi
+	done
+	want=0
+	[ -e "${app%.roc}.status" ] && want="$(cat "${app%.roc}.status")"
+	if [ "$(cat "$d/native.status")" != "$want" ]; then
+		echo "  $name: exit status $(cat "$d/native.status"), expected $want"
+		sed 's/^/    /' "$d/native.err" | head -5
+		status=1
+	fi
+	[ "$status" -eq 0 ] && echo "  $name: agrees ($(wc -l <"$d/native.out") lines, exit $(cat "$d/native.status"))"
+done
+exit "$status"

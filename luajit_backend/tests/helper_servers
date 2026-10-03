@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# The helper servers basic-cli's cases expect (upstream's tcp_echo_server.py
+# and ci/rust_http_server), as scripts/helper_server, started around a
+# command by scripts/with_helper inside scripts/netns_run. Each check runs the
+# client in the helper's private network namespace.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+scripts="$here/../scripts"
+failures=0
+fail() { echo "helper_servers: $1"; failures=$((failures + 1)); }
+
+with() { "$scripts/netns_run" "$scripts/with_helper" "$@"; }
+with_dns() { "$scripts/netns_run" --private-dns "$scripts/with_helper" dns "$@"; }
+
+# HTTP: one request per connection, response printed raw (CRLFs dropped).
+http() { # method path [body]
+	local body="${3-}"
+	with http bash -c '
+		exec 3<>/dev/tcp/127.0.0.1/9000 || exit 99
+		printf "%s %s HTTP/1.1\r\nHost: localhost:9000\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" "$1" "$2" "${#3}" "$3" >&3
+		tr -d "\r" <&3' http "$1" "$2" "$body"
+}
+expect_http() { # label method path body want_status want_type want_body
+	local out status type body
+	out="$(http "$2" "$3" "$4")"
+	status="$(sed -n 1p <<< "$out")"
+	type="$(grep -i '^content-type:' <<< "$out" | cut -d' ' -f2-)"
+	body="$(sed '1,/^$/d' <<< "$out")"
+	[ "$status" = "$5" ] || fail "$1: status '$status', expected '$5'"
+	[ "$type" = "$6" ] || fail "$1: content-type '$type', expected '$6'"
+	[ "$body" = "$7" ] || fail "$1: body '$body', expected '$7'"
+}
+expect_http "utf8test" GET /utf8test "" "HTTP/1.1 200 OK" "text/plain; charset=utf-8" "Hello utf8"
+expect_http "html" GET /html "" "HTTP/1.1 200 OK" "text/html; charset=utf-8" $'<html>\n<body>Basic CLI HTTP test</body>\n</html>'
+expect_http "invalid-json" GET /invalid-json "" "HTTP/1.1 200 OK" "application/json" "not-json"
+expect_http "echo-json" POST /echo-json '{"foo":"Hello Json!"}' "HTTP/1.1 200 OK" "application/json" '{"foo":"Hello Json!"}'
+expect_http "default" GET /anything "" "HTTP/1.1 200 OK" "application/json" '{"foo":"Hello Json!"}'
+expect_http "GET /echo-json is the default" GET /echo-json "" "HTTP/1.1 200 OK" "application/json" '{"foo":"Hello Json!"}'
+bytes="$(with http bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000; printf "GET /invalid-utf8 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n" >&3; cat <&3' | od -An -tx1 | tr -d ' \n')"
+[ "${bytes: -2}" = "ff" ] && [ "$(printf '%s' "$bytes" | grep -o '0d0a0d0a.*' )" = "0d0a0d0aff" ] || fail "invalid-utf8: body is not the single byte ff ($bytes)"
+
+# Routes under /x/ serve this repository's own corpus (basic_cli_extra) and
+# never shadow upstream's: a status, an echo of the request as received,
+# awkward response headers, and a delayed answer.
+expect_http "x/status/404" GET /x/status/404 "" "HTTP/1.1 404 Not Found" "text/plain" "status 404"
+expect_http "x/status/599" GET /x/status/599 "" "HTTP/1.1 599 Unknown" "text/plain" "status 599"
+expect_http "x/echo" PUT "/x/echo?a=1" "data" "HTTP/1.1 200 OK" "text/plain" "$(printf 'PUT /x/echo?a=1\nconnection: close\ncontent-length: 4\nhost: localhost:9000\n\ndata')"
+headers="$(http GET /x/headers "" | sed -n '2,/^$/p' | grep -iv '^date:')"
+want="$(printf 'X-Multi: one\nx-other: 2\nX-Multi: two\nx-bin: caf\xc3\xa9\nx-tab: a\tb\ncontent-type: text/plain\ncontent-length: 7\nconnection: close\n')"
+[ "$headers" = "$want" ] || fail "x/headers: got '$headers'"
+slow="$(with http bash -c 's=$(date +%s%N); exec 3<>/dev/tcp/127.0.0.1/9000
+	printf "GET /x/slow/300 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n" >&3; body=$(tr -d "\r" <&3 | sed "1,/^\$/d")
+	printf "%s %d" "$body" $(( ($(date +%s%N) - s) / 1000000 ))')"
+[ "${slow% *}" = "slow" ] && [ "${slow#* }" -ge 300 ] || fail "x/slow/300: got '$slow' (body, elapsed ms)"
+
+# Keep-alive: two requests on one connection, the second answered too.
+two="$(with http bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000
+	printf "GET /utf8test HTTP/1.1\r\nHost: x\r\n\r\nGET /html HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n" >&3; tr -d "\r" <&3')"
+[ "$(grep -o "HTTP/1.1 200 OK" <<< "$two" | wc -l)" = 2 ] || fail "keep-alive: expected two responses, got: $two"
+
+# A request pipelined behind a delayed one is answered after it, in order.
+queued="$(with http bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000
+	printf "GET /x/slow/100 HTTP/1.1\r\nHost: x\r\n\r\nGET /utf8test HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n" >&3; tr -d "\r" <&3')"
+[ "$(grep -o 'slow\|Hello utf8' <<< "$queued" | paste -sd,)" = "slow,Hello utf8" ] || fail "pipelined behind a delay: got '$queued'"
+
+# TCP echo on 8085, line by line, then a second connection after the first closes.
+echoed="$(with tcp bash -c 'exec 3<>/dev/tcp/127.0.0.1/8085; printf "Hi\n" >&3; read -r a <&3; exec 3<&-
+	exec 4<>/dev/tcp/127.0.0.1/8085; printf "again|" >&4; read -r -d "|" b <&4; printf "%s,%s" "$a" "$b"')"
+[ "$echoed" = "Hi,again" ] || fail "tcp echo: got '$echoed'"
+
+# DNS: a name server on 127.0.0.1:53 that never answers, so a lookup inside
+# --private-dns waits out the resolver's 1 s timeout and fails; without the
+# helper the query is refused at once.
+slow="$(with_dns bash -c 's=$(date +%s%N); getent ahosts slow.test; rc=$?; printf "%d %d" $rc $(( ($(date +%s%N) - s) / 1000000 ))')"
+[ "${slow% *}" -ne 0 ] && [ "${slow#* }" -ge 900 ] || fail "dns: lookup with an unanswering server: '$slow' (status, elapsed ms)"
+fast="$("$scripts/netns_run" --private-dns bash -c 's=$(date +%s%N); getent ahosts slow.test; rc=$?; printf "%d %d" $rc $(( ($(date +%s%N) - s) / 1000000 ))')"
+[ "${fast% *}" -ne 0 ] && [ "${fast#* }" -lt 500 ] || fail "dns: lookup with no server: '$fast' (status, elapsed ms)"
+local_name="$(with_dns getent ahosts localhost | head -1)"
+[ -n "$local_name" ] || fail "dns: localhost no longer resolves from /etc/hosts"
+
+# with_helper passes the command's exit status through and stops the helper.
+with tcp sh -c 'exit 5'
+rc=$?
+[ "$rc" -eq 5 ] || fail "with_helper exit status $rc, expected 5"
+with nosuch true 2>/dev/null
+rc=$?
+[ "$rc" -ne 0 ] || fail "an unknown helper name succeeded"
+
+[ "$failures" -eq 0 ] && echo "helper_servers: all passed"
+exit "$failures"

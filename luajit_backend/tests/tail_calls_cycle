@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# scripts/tail_calls.lua classifies a tail call's callee as single- or
+# multi-valued. Mutually tail-calling functions must be classified together:
+# here f tail-calls g and also returns two values, g tail-calls f, so both are
+# multi-valued and `return g(x)` must not be flagged. The fixture is the real
+# runtime modules with runtime.lua replaced; `both` reaches f before g, the
+# order in which a classification that trusts its first guess for g goes wrong.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/tail_calls_cycle.XXXXXX")"
+trap 'rm -rf "$fixture"' EXIT
+for m in wide int128 list float sort numparse fmath simd crypto; do
+	ln -s "$root/src/backend/lua/$m.lua" "$fixture/$m.lua"
+done
+cat > "$fixture/runtime.lua" <<'LUA'
+local M = {}
+local g
+local function f(x)
+	if x > 0 then return g(x - 1) end
+	return 1, 2
+end
+g = function(x)
+	if x > 0 then return f(x) end
+	return 1
+end
+function M.both(x, y)
+	if y then return f(x) end
+	return g(x)
+end
+return M
+LUA
+out="$(luajit "$root/luajit_backend/scripts/tail_calls.lua" "$fixture/" --check 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ]; then
+	echo "tail_calls_cycle: --check flagged a multi-valued callee in a tail-call cycle (exit $rc):"
+	echo "$out"
+	exit 1
+fi
+echo "tail_calls_cycle: passed"

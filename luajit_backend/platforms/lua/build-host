@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Builds the Lua platform's native host, targets/x64musl/libhost.a: host.zig
+# with the roc builtins it needs (zig build-lib, outside build.zig) plus a
+# static musl LuaJIT ($ROC_LUAJIT_LUAJIT_STATIC, set by the project flake)
+# merged into one archive. crt1.o and libc.a are fx's (symlinks).
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../../.." && pwd)"
+luajit_static="${ROC_LUAJIT_LUAJIT_STATIC:?set by the project flake (nix develop)}"
+out="$here/targets/x64musl"
+mkdir -p "$out"
+work="$(mktemp -d "${TMPDIR:-/tmp}/lua_platform_host.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+cd "$work" || exit 1
+zig build-lib -target x86_64-linux-musl -O ReleaseFast -fPIC -ffunction-sections -fdata-sections --name host \
+	--dep builtins --dep host_alloc --dep shim_io -Mroot="$here/host.zig" \
+	--dep vendor_parse_float --dep shim_io --dep roc_str_view --dep vendor_ryu --dep tracy --dep build_options -Mbuiltins="$root/src/builtins/mod.zig" \
+	--dep builtins --dep build_options -Mhost_alloc="$root/src/host_alloc/mod.zig" \
+	-Mshim_io="$root/src/shim_io.zig" \
+	-Mroc_str_view="$root/src/default_platform/roc_str_view.zig" \
+	-Mvendor_parse_float="$root/vendor/parse_float/parse_float.zig" \
+	-Mvendor_ryu="$root/vendor/ryu.zig" \
+	--dep build_options -Mtracy="$root/src/build/tracy.zig" \
+	-Mbuild_options="$here/build_options.zig" || exit 1
+# One archive: the host's objects and LuaJIT's.
+mkdir lj && (cd lj && ar x "$luajit_static/lib/libluajit-5.1.a") || exit 1
+cp libhost.a combined.a && find lj -name "*.o" -print0 | xargs -0 ar rcs combined.a || exit 1
+mv combined.a "$out/libhost.a"
+for f in crt1.o libc.a; do
+	[ -e "$out/$f" ] || ln -s "../../../../../test/fx/platform/targets/x64musl/$f" "$out/$f"
+done
+echo "built $out/libhost.a"

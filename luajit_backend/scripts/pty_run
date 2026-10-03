@@ -1,0 +1,150 @@
+#!/usr/bin/env luajit
+-- Run a command on a pseudo-terminal, as upstream basic-cli's scripts/test.py
+-- pty_process does: the program's stdin, stdout and stderr are the terminal
+-- (here also its controlling terminal, in a new session), the bytes of
+-- INPUT_FILE are typed 0.25 s after start, one every DELAY seconds (default
+-- 0.08), everything written to the terminal is copied to stdout, and the exit
+-- status is the program's (128 + signal when killed by one). A program still
+-- running after TIMEOUT seconds is killed and pty_run exits 124.
+--
+-- Usage: pty_run INPUT_FILE TIMEOUT [DELAY] -- COMMAND [ARG...]
+--        pty_run INPUT_FILE TIMEOUT COMMAND [ARG...]
+local ffi = require("ffi")
+local bit = require("bit")
+ffi.cdef([[
+typedef int pid_t;
+typedef struct { char opaque[256]; } posix_spawn_file_actions_t;
+typedef struct { char opaque[1024]; } posix_spawnattr_t;
+struct pollfd { int fd; short events; short revents; };
+struct timespec { long tv_sec; long tv_nsec; };
+int posix_openpt(int flags);
+int grantpt(int fd);
+int unlockpt(int fd);
+char *ptsname(int fd);
+int posix_spawn_file_actions_init(posix_spawn_file_actions_t *fa);
+int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *fa, int fd, const char *path, int flags, int mode);
+int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *fa, int fd, int newfd);
+int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *fa, int fd);
+int posix_spawnattr_init(posix_spawnattr_t *attr);
+int posix_spawnattr_setflags(posix_spawnattr_t *attr, short flags);
+int posix_spawnp(pid_t *pid, const char *file, const posix_spawn_file_actions_t *fa, const posix_spawnattr_t *attr, char *const argv[], char *const envp[]);
+pid_t waitpid(pid_t pid, int *status, int options);
+int kill(pid_t pid, int sig);
+long read(int fd, void *buf, size_t n);
+long write(int fd, const void *buf, size_t n);
+int poll(struct pollfd *fds, unsigned long n, int timeout);
+int close(int fd);
+int clock_gettime(int clock, struct timespec *tp);
+char *strerror(int errnum);
+extern char **environ;
+]])
+local C = ffi.C
+local O_RDWR, O_NOCTTY, O_CLOEXEC = 2, 0x100, 0x80000
+local POSIX_SPAWN_SETSID, WNOHANG, SIGKILL, POLLIN = 0x80, 1, 9, 1
+
+local function die(what)
+	io.stderr:write(("pty_run: %s: %s\n"):format(what, ffi.string(C.strerror(ffi.errno()))))
+	os.exit(125)
+end
+
+local input_path, timeout = arg[1], tonumber(arg[2])
+local first, delay = 3, 0.08
+if arg[4] == "--" then
+	delay, first = tonumber(arg[3]), 5
+elseif arg[3] == "--" then
+	first = 4
+end
+if not input_path or not timeout or not delay or not arg[first] then
+	io.stderr:write("usage: pty_run INPUT_FILE TIMEOUT [DELAY] -- COMMAND [ARG...]\n")
+	os.exit(2)
+end
+local f = assert(io.open(input_path, "rb"))
+local input = f:read("*a")
+f:close()
+
+local ts = ffi.new("struct timespec")
+local function now()
+	C.clock_gettime(1, ts) -- CLOCK_MONOTONIC
+	return tonumber(ts.tv_sec) + tonumber(ts.tv_nsec) / 1e9
+end
+
+local master = C.posix_openpt(bit.bor(O_RDWR, O_NOCTTY, O_CLOEXEC))
+if master < 0 then die("posix_openpt") end
+if C.grantpt(master) ~= 0 or C.unlockpt(master) ~= 0 then die("grantpt") end
+local slave_path = ffi.string(C.ptsname(master))
+
+local fa = ffi.new("posix_spawn_file_actions_t")
+local attr = ffi.new("posix_spawnattr_t")
+C.posix_spawn_file_actions_init(fa)
+-- After setsid, opening the terminal (without O_NOCTTY) makes it the child's
+-- controlling terminal.
+C.posix_spawn_file_actions_addopen(fa, 0, slave_path, O_RDWR, 0)
+C.posix_spawn_file_actions_adddup2(fa, 0, 1)
+C.posix_spawn_file_actions_adddup2(fa, 0, 2)
+C.posix_spawnattr_init(attr)
+C.posix_spawnattr_setflags(attr, POSIX_SPAWN_SETSID)
+local argc = #arg - first + 1
+local argv = ffi.new("char *[?]", argc + 1)
+local keep = {}
+for i = 0, argc - 1 do
+	keep[i] = ffi.new("char[?]", #arg[first + i] + 1, arg[first + i])
+	argv[i] = keep[i]
+end
+local pid = ffi.new("pid_t[1]")
+local rc = C.posix_spawnp(pid, arg[first], fa, attr, argv, C.environ)
+if rc ~= 0 then
+	ffi.errno(rc)
+	die("spawning " .. arg[first])
+end
+pid = pid[0]
+
+local buf = ffi.new("uint8_t[65536]")
+local pfd = ffi.new("struct pollfd[1]")
+pfd[0].fd, pfd[0].events = master, POLLIN
+local open = true
+local function drain(wait_ms)
+	while open do
+		pfd[0].revents = 0
+		if C.poll(pfd, 1, wait_ms) <= 0 then return end
+		local n = C.read(master, buf, 65536)
+		if n <= 0 then
+			open = false -- EIO once every copy of the terminal's other side is closed
+			return
+		end
+		io.stdout:write(ffi.string(buf, n))
+		wait_ms = 0
+	end
+end
+
+local start = now()
+local deadline = start + timeout
+local next_byte, next_at = 1, start + 0.25
+local status = ffi.new("int[1]")
+local exited
+while true do
+	local got = C.waitpid(pid, status, WNOHANG)
+	if got == pid then
+		exited = true
+		break
+	end
+	local t = now()
+	if t >= deadline then break end
+	if next_byte <= #input and t >= next_at then
+		C.write(master, ffi.cast("const char *", input) + next_byte - 1, 1)
+		next_byte, next_at = next_byte + 1, t + delay
+	end
+	local until_next = next_byte <= #input and math.max(0, next_at - t) or 0.1
+	drain(math.max(1, math.floor(math.min(until_next, 0.1, deadline - t) * 1000)))
+end
+drain(0)
+io.stdout:flush()
+if not exited then
+	C.kill(pid, SIGKILL)
+	C.waitpid(pid, status, 0)
+	C.close(master)
+	os.exit(124)
+end
+C.close(master)
+local s = status[0]
+local code = bit.band(s, 0x7f) == 0 and bit.band(bit.rshift(s, 8), 0xff) or 128 + bit.band(s, 0x7f)
+os.exit(code)

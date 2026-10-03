@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Run a command in a private network namespace with its loopback up, as the
+# caller's own uid and gid. Tests that start or reach network servers run
+# here, so they can neither reach nor collide with this machine's listeners
+# (port 9000 belongs to a machine service).
+#
+# The outer user namespace maps the caller to root only long enough to set
+# the namespace up; the inner one maps root back to the caller's ids, so the
+# command runs without capabilities and file permission checks behave as
+# outside.
+#
+# --private-dns also gives the command a private mount namespace in which
+# names resolve only through 127.0.0.1:53 (a helper server may listen there;
+# port 53 is made bindable without privileges): resolv.conf names it with a
+# 1 s timeout and one attempt, nsswitch.conf says `hosts: files dns`, and the
+# host's nscd and systemd-resolved sockets are hidden behind empty mounts.
+# Nothing outside the namespaces changes.
+#
+# Usage: netns_run [--private-dns] COMMAND [ARG...]
+private_dns=0
+if [ "${1-}" = "--private-dns" ]; then
+	private_dns=1
+	shift
+fi
+uid="$(id -u)" gid="$(id -g)"
+unshare_flags=(--user --map-root-user --net)
+[ "$private_dns" -eq 1 ] && unshare_flags+=(--mount)
+exec unshare "${unshare_flags[@]}" -- sh -c '
+	ip link set lo up || exit 125
+	uid=$1 gid=$2 private_dns=$3
+	shift 3
+	if [ "$private_dns" = 1 ]; then
+		dir=$(mktemp -d) || exit 125
+		printf "nameserver 127.0.0.1\noptions timeout:1 attempts:1\n" > "$dir/resolv.conf"
+		printf "hosts: files dns\n" > "$dir/nsswitch.conf"
+		for d in /run/nscd /run/systemd/resolve; do
+			[ -d "$d" ] && { mount -t tmpfs none "$d" || exit 125; }
+		done
+		# /etc/resolv.conf may be a symlink into a directory just hidden
+		# (the systemd-resolved stub file): then the file is created there.
+		for name in resolv.conf nsswitch.conf; do
+			target=$(readlink -f "/etc/$name") || exit 125
+			if [ -e "$target" ]; then
+				mount --bind "$dir/$name" "$target" || exit 125
+			else
+				cp "$dir/$name" "$target" || exit 125
+			fi
+		done
+		echo 0 > /proc/sys/net/ipv4/ip_unprivileged_port_start || exit 125
+	fi
+	exec unshare --user --map-user="$uid" --map-group="$gid" -- "$@"
+' netns_run "$uid" "$gid" "$private_dns" "$@"

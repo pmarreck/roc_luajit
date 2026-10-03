@@ -7500,6 +7500,7 @@ const Lowerer = struct {
                 .rc_effect = op.rcEffect(),
                 .args = try self.result.store.addLocalSpan(lowered.ids),
                 .interchangeable = interchangeable,
+                .map_output_elem = if (try self.listMapElemLayouts(args)) |elems| elems.out else null,
                 .next = next,
             } }, where.source());
             current = try self.prependExprs(where, lowered, current);
@@ -7532,14 +7533,16 @@ const Lowerer = struct {
     /// on that width, so the op resolves to a constant 0 there. Both bits are
     /// stored so the lowered op is target-independent: codegen selects the bit
     /// for the width it is building.
-    fn listMapLayoutsInterchangeable(self: *Lowerer, args: anytype) Common.LowerError!layout.WidthValues(bool) {
-        const none = layout.WidthValues(bool).both(false, false);
+    /// Input and output element layouts of a `list_map_can_reuse` (the
+    /// list's element and the transform's return), or null when in-place
+    /// map is off or the input is not a list with an allocation.
+    fn listMapElemLayouts(self: *Lowerer, args: anytype) Common.LowerError!?ListMapElems {
         if (args.len != 2) Common.invariant("list_map_can_reuse reached LIR lowering with the wrong arity");
-        if (!self.list_in_place_map) return none;
+        if (!self.list_in_place_map) return null;
 
         const list_layout_idx = try self.layoutOfType(try self.lowerExprTy(GuardedList.at(args, 0)));
         const list_layout = self.result.layouts.getLayout(list_layout_idx);
-        if (list_layout.tag != .list) return none;
+        if (list_layout.tag != .list) return null;
         const in_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(list_layout.getIdx());
 
         const transform_ty = self.solved.expr_tys.items[@intFromEnum(GuardedList.at(args, 1))];
@@ -7550,10 +7553,16 @@ const Lowerer = struct {
         const out_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(
             try self.layoutOfType(try self.lowerType(out_ret)),
         );
+        return .{ .in = in_elem_idx, .out = out_elem_idx };
+    }
 
+    const ListMapElems = struct { in: layout.Idx, out: layout.Idx };
+
+    fn listMapLayoutsInterchangeable(self: *Lowerer, args: anytype) Common.LowerError!layout.WidthValues(bool) {
+        const elems = try self.listMapElemLayouts(args) orelse return layout.WidthValues(bool).both(false, false);
         return layout.WidthValues(bool).both(
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u64),
+            self.listMapInterchangeableAtWidth(elems.in, elems.out, .u32),
+            self.listMapInterchangeableAtWidth(elems.in, elems.out, .u64),
         );
     }
 

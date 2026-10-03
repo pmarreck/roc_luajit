@@ -3133,6 +3133,8 @@ pub fn build(b: *std.Build) void {
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
     const build_test_lambda_mono_differential_step = b.step("build-test-lambda-mono-differential", "Build the Lambda Mono differential harness");
     const run_test_lambda_mono_differential_step = b.step("run-test-lambda-mono-differential", "Run the Lambda Mono body-lowering differential harness (Debug only)");
+    const build_test_luajit_differential_step = b.step("build-test-luajit-differential", "Build the experimental LuaJIT backend differential harness");
+    const run_test_luajit_differential_step = b.step("run-test-luajit-differential", "Run the experimental LuaJIT backend against the LIR interpreter (needs luajit on PATH)");
     const build_playground_step = b.step("build-playground", "Build the WASM playground");
     const build_playground_wasm_archive_step = b.step("build-playground-wasm-archive", "Build playground.wasm and zstd-compress it under zig-out/lib/playground");
     const build_repl_wasm_step = b.step("build-repl-wasm", "Build the dedicated REPL WebAssembly module");
@@ -4626,6 +4628,78 @@ pub fn build(b: *std.Build) void {
         run_test_lambda_mono_differential_step,
         lambda_mono_differential_run_args,
     );
+
+    // Experimental LuaJIT backend (roc_luajit): compares Lua emitted by
+    // `backend.lua`, run in a separate luajit process, with the LIR
+    // interpreter over the eval corpus. See ARCHITECTURE.md §7.
+    const luajit_differential_exe = b.addExecutable(.{
+        .name = "luajit-differential-runner",
+        .linkage = if (target.result.os.tag == .linux and target.result.abi.isMusl()) .static else null,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/luajit_differential_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    luajit_differential_exe.stack_size = stack_budget.roc_stack_size;
+    configureBackend(luajit_differential_exe, target);
+    roc_modules.addAll(luajit_differential_exe);
+    luajit_differential_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    luajit_differential_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    luajit_differential_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+    luajit_differential_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
+    luajit_differential_exe.root_module.addOptions("coverage_options", blk: {
+        const opts = b.addOptions();
+        opts.addOption(bool, "coverage", false);
+        break :blk opts;
+    });
+    luajit_differential_exe.step.dependOn(&write_compiled_builtins.step);
+    try addLlvmSupportToStep(
+        b,
+        luajit_differential_exe,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        llvm_embedded_module,
+        zstd,
+    );
+    if (luajit_differential_exe.root_module.resolved_target.?.result.os.tag != .windows or
+        luajit_differential_exe.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        luajit_differential_exe.root_module.link_libcpp = true;
+    }
+    _ = install_and_run(
+        b,
+        no_bin,
+        luajit_differential_exe,
+        null,
+        build_test_luajit_differential_step,
+        run_test_luajit_differential_step,
+        lambda_mono_differential_run_args,
+    );
+
+    // Reference vectors for the LuaJIT runtime's I128/U128/Dec arithmetic,
+    // computed with upstream's Zig builtins (luajit_backend/tests/run).
+    const luajit_numeric_vectors_exe = b.addExecutable(.{
+        .name = "luajit-numeric-vectors",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/backend/lua/test/numeric_vectors.zig"),
+            .target = target,
+            // Always ReleaseSafe: Zig 0.16.0's Debug x86_64 backend misreports
+            // @mulWithOverflow on i128 (reports no overflow for
+            // 19945398355856076541 * -17303273454098869922), which would
+            // corrupt these reference vectors.
+            .optimize = .ReleaseSafe,
+            .link_libc = true,
+        }),
+    });
+    luajit_numeric_vectors_exe.root_module.addImport("builtins", roc_modules.builtins);
+    luajit_numeric_vectors_exe.root_module.addImport("ctx", roc_modules.ctx);
+    const install_luajit_numeric_vectors = b.addInstallArtifact(luajit_numeric_vectors_exe, .{});
+    build_test_luajit_differential_step.dependOn(&install_luajit_numeric_vectors.step);
 
     // One explicitly expensive proof gate owns every execution lane. Keep the
     // commands sequential: each corpus is intentionally large, and running

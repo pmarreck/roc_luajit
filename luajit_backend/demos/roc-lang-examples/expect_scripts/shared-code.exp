@@ -1,0 +1,35 @@
+proc normalize_output {output} {
+    # Remove leading newline for cleaner multiline string formatting
+    regsub {^\n} $output "" result
+    # Convert Unix line endings to Windows-style line endings for expect matching
+    regsub -all {\n} $result "\r\n" result
+    return $result
+}
+
+proc check_exit_and_segfault {{expected_code 0}} {
+    set status [wait]
+    
+    # Extract the flags from the wait output
+    set os_status [lindex $status 2]
+    set exit_code [lindex $status 3]
+
+    if {$os_status == "CHILDKILLED"} {
+        set signal [lindex $status 3] ;# If killed by signal, index 3 is the signal name
+        if {$signal == "SIGSEGV"} {
+            puts stderr "\nExpect script failed: The roc executable experienced a segmentation fault."
+        } else {
+            puts stderr "\nExpect script failed: The roc executable was killed by signal: $signal."
+        }
+        exit 1
+    } elseif {$os_status == 0} {
+        if {$exit_code != $expected_code} {
+            puts stderr "\nExpect script failed: The roc executable exited with code $exit_code (expected $expected_code)."
+            exit 1
+        } else {
+            exit 0
+        }
+    } else {
+        puts stderr "\nExpect script failed: OS error during wait."
+        exit 1
+    }
+}

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# scripts/netns_run runs a command in a private network namespace: its own
+# loopback (up), no route to this machine's listeners (port 9000 belongs to a
+# machine service and must never be reached by tests), and the caller's own
+# uid and gid, so file permission checks behave as outside.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+run="$here/../scripts/netns_run"
+failures=0
+fail() { echo "netns_run: $1"; failures=$((failures + 1)); }
+
+outside_ns="$(readlink /proc/self/ns/net)"
+inside="$("$run" sh -c 'readlink /proc/self/ns/net; id -u; id -g; cat /sys/class/net/lo/operstate /sys/class/net/lo/flags' 2>&1)"
+rc=$?
+[ "$rc" -eq 0 ] || fail "exit status $rc: $inside"
+ns="$(sed -n 1p <<< "$inside")"
+[ -n "$ns" ] && [ "$ns" != "$outside_ns" ] || fail "same network namespace as the caller ($ns)"
+[ "$(sed -n 2p <<< "$inside")" = "$(id -u)" ] || fail "uid $(sed -n 2p <<< "$inside"), expected $(id -u)"
+[ "$(sed -n 3p <<< "$inside")" = "$(id -g)" ] || fail "gid $(sed -n 3p <<< "$inside"), expected $(id -g)"
+flags="$(sed -n 5p <<< "$inside")"
+[ $(( flags & 1 )) -eq 1 ] || fail "loopback is down (flags $flags)"
+
+# Arguments with spaces and the command's exit status pass through.
+out="$("$run" sh -c 'printf "%s|" "$@"; exit 7' sh 'a b' c)"
+rc=$?
+[ "$out" = "a b|c|" ] || fail "arguments arrived as '$out'"
+[ "$rc" -eq 7 ] || fail "exit status $rc, expected 7"
+
+# --private-dns: names resolve only through 127.0.0.1:53 inside the namespace
+# (resolv.conf, `hosts: files dns`, the host's nscd and systemd-resolved
+# sockets hidden), with a 1 s, single-attempt resolver timeout, and port 53 is
+# bindable by the unprivileged command. Files outside stay untouched.
+dns="$("$run" --private-dns sh -c '
+	grep -v "^#" /etc/resolv.conf | tr "\n" ";"; echo
+	grep "^hosts:" /etc/nsswitch.conf
+	ls /run/nscd/socket /run/systemd/resolve/io.systemd.Resolve 2>/dev/null | wc -l
+	cat /proc/sys/net/ipv4/ip_unprivileged_port_start
+	id -u' 2>&1)"
+[ "$(sed -n 1p <<< "$dns")" = "nameserver 127.0.0.1;options timeout:1 attempts:1;" ] || fail "--private-dns resolv.conf: $(sed -n 1p <<< "$dns")"
+[ "$(sed -n 2p <<< "$dns" | tr -s ' ')" = "hosts: files dns" ] || fail "--private-dns nsswitch: $(sed -n 2p <<< "$dns")"
+[ "$(sed -n 3p <<< "$dns")" = "0" ] || fail "--private-dns: host resolver sockets visible"
+[ "$(sed -n 4p <<< "$dns")" = "0" ] || fail "--private-dns: privileged ports start at $(sed -n 4p <<< "$dns")"
+[ "$(sed -n 5p <<< "$dns")" = "$(id -u)" ] || fail "--private-dns: uid $(sed -n 5p <<< "$dns")"
+[ "$(grep '^hosts:' /etc/nsswitch.conf)" != "hosts: files dns" ] || fail "the host's own nsswitch.conf was changed"
+
+[ "$failures" -eq 0 ] && echo "netns_run: all passed"
+exit "$failures"

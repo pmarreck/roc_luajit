@@ -8562,6 +8562,8 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         return rocBuildDefaultApp(ctx, args, &owned_staged);
     }
 
+    if (isLuajitTarget(args)) return rocBuildLuajit(ctx, args);
+
     // Select build path based on optimization level
     switch (args.opt) {
         .dev => return rocBuildNative(ctx, args),
@@ -8573,7 +8575,8 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_app.Staged) CliMainError!BuildResult {
     defer staged.deinit(ctx.gpa);
 
-    if (defaultBuildTarget(args).toOsTag() == .openbsd) {
+    const luajit = isLuajitTarget(args);
+    if (!luajit and defaultBuildTarget(args).toOsTag() == .openbsd) {
         return ctx.fail(.{ .unsupported_default_platform_target = .{
             .target = "x64openbsd",
         } });
@@ -8619,6 +8622,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_a
         synthetic_args.output = args.synthetic_output_basename orelse try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
     }
 
+    if (luajit) return rocBuildLuajit(ctx, synthetic_args);
     switch (synthetic_args.opt) {
         .dev => return rocBuildNative(ctx, synthetic_args),
         .interpreter => return rocBuildEmbedded(ctx, synthetic_args),
@@ -11691,6 +11695,206 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
 
     return .{
         .output_path = final_output_path,
+        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+    };
+}
+
+/// Upper bound on a platform's `host.lua`.
+const max_luajit_host_size = 16 * 1024 * 1024;
+
+/// The fingerprint (`backend.lua_host.platformFingerprint`) of the `.roc`
+/// files directly in a platform's directory, which selects a bundled LuaJIT
+/// host for a platform without its own `host.lua`.
+fn luajitPlatformFingerprint(ctx: *CliCtx, platform_dir: []const u8) (std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error || std.Io.Dir.ReadFileAllocError || std.mem.Allocator.Error)![64]u8 {
+    var dir = try std.Io.Dir.cwd().openDir(ctx.io.std_io, platform_dir, .{ .iterate = true });
+    defer dir.close(ctx.io.std_io);
+    var sources: std.ArrayList(backend.lua_host.PlatformSource) = .empty;
+    var it = dir.iterate();
+    while (try it.next(ctx.io.std_io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".roc")) continue;
+        const name = try ctx.arena.dupe(u8, entry.name);
+        const source = try dir.readFileAlloc(ctx.io.std_io, name, ctx.arena, .limited(max_luajit_host_size));
+        try sources.append(ctx.arena, .{ .name = name, .source = source });
+    }
+    const scratch = try ctx.arena.alloc(backend.lua_host.PlatformSource, sources.items.len);
+    return backend.lua_host.platformFingerprint(sources.items, scratch);
+}
+
+/// Whether `--target` selects the experimental LuaJIT backend.
+fn isLuajitTarget(args: cli_args.BuildArgs) bool {
+    const name = args.target orelse return false;
+    return std.mem.eql(u8, name, "luajit");
+}
+
+/// `roc build --target=luajit`: lower to ARC-complete LIR exactly as the
+/// embedded build does, emit it as a platform-mode Lua chunk (`backend.lua`),
+/// and write it wrapped in the platform's LuaJIT host (`backend.lua_host`) as
+/// one runnable file. A platform supplies its host as `host.lua` beside its
+/// main module; the synthetic default platform's host is built in.
+fn rocBuildLuajit(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
+    const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
+    const stderr = ctx.io.stderr();
+
+    var reporter = makeReporter(ctx, "roc build", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+
+    const output_path = if (args.output) |output|
+        try ctx.arena.dupe(u8, output)
+    else
+        try std.fmt.allocPrint(ctx.arena, "{s}.lua", .{args.synthetic_output_basename orelse try base.module_path.getModuleNameAlloc(ctx.arena, args.path)});
+
+    var build_env = try initCliBuildEnv(ctx, .{
+        .max_threads = args.max_threads,
+        .no_cache = args.no_cache,
+        .verbose_cache = args.verbose,
+        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+        .track_watch_inputs = args.watch_inputs_file != null,
+        .source_dir_override = args.source_dir_override,
+        .root_source_url = args.root_source_url,
+    });
+    if (args.synthetic_root_original_path) |original_path| {
+        if (args.synthetic_root_original_source) |original_source| {
+            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
+        }
+    }
+    defer build_env.deinit();
+    defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
+
+    reporter.begin("Resolving Dependencies");
+    build_env.discoverDependencies(args.path) catch |err| {
+        reporter.fail();
+        try renderDiagnostics(ctx, &build_env);
+        return err;
+    };
+    reporter.end();
+
+    const host_source: []const u8 = if (args.synthetic_default_platform)
+        backend.lua_host.default_host_source
+    else blk: {
+        const platform_source = build_env.getPlatformRootFile() orelse {
+            try renderProblem(ctx, .{ .no_platform_found = .{ .app_path = args.path } });
+            return error.NoPlatformSource;
+        };
+        const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
+        const host_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, backend.lua_host.host_file_name });
+        const own_host: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, host_path, ctx.arena, .limited(max_luajit_host_size)) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => {
+                try stderr.print("Error: could not read the platform's LuaJIT host {s}: {s}.\n", .{ host_path, @errorName(err) });
+                return error.NoPlatformSource;
+            },
+        };
+        if (own_host) |source| break :blk source;
+        const fingerprint = luajitPlatformFingerprint(ctx, platform_dir) catch |err| {
+            try stderr.print("Error: could not read the platform's sources in {s}: {s}.\n", .{ platform_dir, @errorName(err) });
+            return error.NoPlatformSource;
+        };
+        break :blk backend.lua_host.bundledHost(&fingerprint) orelse {
+            try stderr.print("Error: the platform has no LuaJIT host; --target=luajit needs {s}, or a host bundled with roc_luajit for platform fingerprint {s}.\n", .{ host_path, &fingerprint });
+            return error.NoPlatformSource;
+        };
+    };
+
+    // Lua values have no target layout of their own; lowering follows the
+    // host's 64-bit target, whose usize the runtime's U64 lengths match.
+    // LuaJIT output has no native optimization level: lower with the dev
+    // backend's configuration (dbg kept, no LLVM-oriented passes).
+    const lowering_opt: cli_args.OptLevel = .dev;
+    const target = roc_target.host_cpu.nativeTarget();
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
+    build_env.setTarget(target);
+    build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(.{ .platform_entrypoints = .lir_image }, lowering_opt, specialization_strategy, target_usize, false));
+    reporter.begin("Type Checking");
+    build_env.compileDiscovered() catch |err| {
+        reporter.fail();
+        try renderDiagnostics(ctx, &build_env);
+        return err;
+    };
+    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
+
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
+    const total_warning_count = diag.warnings;
+
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
+
+    reporter.begin(loweringProgressLabel(specialization_strategy));
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    var lowered = try lowerCheckedSourceToLir(
+        ctx.gpa,
+        ctx.gpa,
+        root_artifact,
+        imported_artifacts,
+        relation_artifacts,
+        .{ .platform_entrypoints = .lir_image },
+        lowering_opt,
+        specialization_strategy,
+        target_usize,
+        false,
+        build_env.postCheckExecutor(),
+        &spec_timing,
+        build_env.runtimeProgramSession(),
+        null,
+    );
+    defer lowered.deinit();
+    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
+
+    reporter.begin("LuaJIT Emission");
+    const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+    defer ctx.gpa.free(platform_entrypoints);
+    const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
+    const entries = try ctx.arena.alloc(backend.lua.Entrypoint, platform_entrypoints.len);
+    for (platform_entrypoints, entries) |entrypoint, *entry| {
+        entry.* = .{ .name = entrypoint_names[entrypoint.ordinal], .proc = entrypoint.root_proc };
+    }
+    if (entries.len == 0) {
+        try stderr.print("Error: the platform provides no entrypoints to run.\n", .{});
+        return error.NoPlatformSource;
+    }
+    const static_exports = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        &lowered,
+        target,
+        .{},
+    );
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_exports);
+    const emitted = try backend.lua.emitProgram(ctx.gpa, .{
+        .store = &lowered.lir_result.store,
+        .layouts = &lowered.lir_result.layouts,
+        .main_proc = entries[0].proc,
+        .entrypoints = entries,
+        .static_data = static_exports,
+    }, .{});
+    defer emitted.deinit(ctx.gpa);
+    const app_chunk = switch (emitted) {
+        .unsupported => |reason| {
+            reporter.fail();
+            try stderr.print("Error: the LuaJIT backend does not support this program yet: {s}\n", .{reason});
+            return error.UnsupportedTarget;
+        },
+        .lua => |source| source,
+    };
+    var program: std.Io.Writer.Allocating = .init(ctx.gpa);
+    defer program.deinit();
+    try backend.lua_host.writeProgram(&program.writer, app_chunk, host_source);
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = output_path, .data = program.written(), .flags = .{ .permissions = .executable_file } });
+    reporter.end();
+
+    if (!args.suppress_build_status) {
+        const elapsed_ns: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns);
+        const cache_stats = build_env.getBuildStats();
+        const cache_percent: u32 = if (cache_stats.modules_total > 0) @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total) else 0;
+        try printBuildSuccess(ctx, output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
+    }
+
+    return .{
+        .output_path = output_path,
         .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
     };
 }

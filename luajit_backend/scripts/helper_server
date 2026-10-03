@@ -1,0 +1,303 @@
+#!/usr/bin/env luajit
+-- The servers basic-cli's test cases talk to, for a LuaJIT-only test setup:
+--   tcp   upstream's scripts/tcp_echo_server.py: 127.0.0.1:8085, one client
+--         at a time, every byte echoed back until the client closes.
+--   http  upstream's ci/rust_http_server (hyper): ::1 and 127.0.0.1 port
+--         9000, HTTP/1.1 with keep-alive, the same routes and bodies, plus
+--         routes under /x/ for this repository's own cases (upstream answers
+--         those paths with its default JSON, which no upstream case requests).
+--   dns   a name server on 127.0.0.1:53 (UDP, and TCP for readiness checks)
+--         that reads queries and never answers, so lookups wait out the
+--         resolver's timeout; for scripts/netns_run --private-dns.
+-- Run it inside scripts/netns_run (scripts/with_helper does), never on the
+-- machine's own network: port 9000 belongs to a machine service here.
+--
+-- Usage: helper_server tcp|http|dns
+local ffi = require("ffi")
+local bit = require("bit")
+ffi.cdef([[
+typedef unsigned int socklen_t;
+struct sockaddr { unsigned short sa_family; char sa_data[14]; };
+struct sockaddr_in { unsigned short sin_family; uint16_t sin_port; uint8_t sin_addr[4]; uint8_t sin_zero[8]; };
+struct sockaddr_in6 { unsigned short sin6_family; uint16_t sin6_port; uint32_t sin6_flowinfo; uint8_t sin6_addr[16]; uint32_t sin6_scope_id; };
+struct pollfd { int fd; short events; short revents; };
+int socket(int domain, int type, int protocol);
+int setsockopt(int fd, int level, int name, const void *value, socklen_t len);
+int bind(int fd, const struct sockaddr *addr, socklen_t len);
+int listen(int fd, int backlog);
+int accept(int fd, struct sockaddr *addr, socklen_t *len);
+long recv(int fd, void *buf, size_t len, int flags);
+long send(int fd, const void *buf, size_t len, int flags);
+int poll(struct pollfd *fds, unsigned long n, int timeout);
+int close(int fd);
+int inet_pton(int af, const char *src, void *dst);
+char *strerror(int errnum);
+typedef long time_t;
+time_t time(time_t *t);
+struct timespec { long tv_sec; long tv_nsec; };
+int clock_gettime(int clock, struct timespec *tp);
+]])
+local C = ffi.C
+local AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM = 2, 10, 1, 2
+local SOL_SOCKET, SO_REUSEADDR, IPPROTO_IPV6, IPV6_V6ONLY = 1, 2, 41, 26
+local POLLIN, MSG_NOSIGNAL, EINTR = 1, 0x4000, 4
+
+local function die(what)
+	io.stderr:write(("helper_server: %s: %s\n"):format(what, ffi.string(C.strerror(ffi.errno()))))
+	os.exit(1)
+end
+
+local function listener(family, address, port, kind)
+	local fd = C.socket(family, kind or SOCK_STREAM, 0)
+	if fd < 0 then die("socket") end
+	local one = ffi.new("int[1]", 1)
+	C.setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, one, 4)
+	local sa
+	local net_port = bit.bor(bit.lshift(bit.band(port, 0xff), 8), bit.rshift(port, 8))
+	if family == AF_INET then
+		sa = ffi.new("struct sockaddr_in", { sin_family = AF_INET, sin_port = net_port })
+		C.inet_pton(AF_INET, address, sa.sin_addr)
+	else
+		C.setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, one, 4)
+		sa = ffi.new("struct sockaddr_in6", { sin6_family = AF_INET6, sin6_port = net_port })
+		C.inet_pton(AF_INET6, address, sa.sin6_addr)
+	end
+	if C.bind(fd, ffi.cast("struct sockaddr *", sa), ffi.sizeof(sa)) ~= 0 then
+		C.close(fd)
+		return nil
+	end
+	if (kind or SOCK_STREAM) == SOCK_STREAM and C.listen(fd, 128) ~= 0 then die("listen") end
+	return fd
+end
+
+local buf = ffi.new("uint8_t[65536]")
+local function receive(fd)
+	while true do
+		local n = C.recv(fd, buf, 65536, 0)
+		if n >= 0 then return n > 0 and ffi.string(buf, n) or nil end
+		if ffi.errno() ~= EINTR then return nil end
+	end
+end
+local function send_all(fd, s)
+	local sent = 0
+	while sent < #s do
+		local n = C.send(fd, ffi.cast("const char *", s) + sent, #s - sent, MSG_NOSIGNAL)
+		if n < 0 then
+			if ffi.errno() ~= EINTR then return false end
+		else
+			sent = sent + n
+		end
+	end
+	return true
+end
+
+-- Upstream's scripts/tcp_echo_server.py.
+local function serve_tcp()
+	local fd = listener(AF_INET, "127.0.0.1", 8085) or die("bind 127.0.0.1:8085")
+	while true do
+		local conn = C.accept(fd, nil, nil)
+		if conn >= 0 then
+			while true do
+				local data = receive(conn)
+				if not data or not send_all(conn, data) then break end
+			end
+			C.close(conn)
+		end
+	end
+end
+
+local DAYS = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" }
+local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+local function http_date()
+	local t = os.date("!*t", tonumber(C.time(nil)))
+	return ("%s, %02d %s %d %02d:%02d:%02d GMT"):format(DAYS[t.wday], t.day, MONTHS[t.month], t.year, t.hour, t.min, t.sec)
+end
+
+local REASONS = { [200] = "OK", [201] = "Created", [204] = "No Content", [301] = "Moved Permanently", [302] = "Found",
+	[400] = "Bad Request", [404] = "Not Found", [418] = "I'm a teapot", [500] = "Internal Server Error", [503] = "Service Unavailable" }
+
+-- A response: status, content type, body, headers written before the
+-- standard ones (as raw lines), and a delay in milliseconds.
+local function response(status, type, body, headers, delay)
+	return { status = status, type = type, body = body, headers = headers or {}, delay = delay or 0 }
+end
+
+-- Upstream's ci/rust_http_server routes, then this repository's /x/ routes:
+-- /x/status/N answers status N; /x/echo the method and target, then each
+-- header as a lowercase name and trimmed value, sorted (the wire's name case
+-- and order are not observable to Roc programs, so they are left out), then a
+-- blank line and the body; /x/headers repeated, mixed-case and non-ASCII header values;
+-- /x/slow/MS "slow" after MS milliseconds.
+local DEFAULT_JSON = '{"foo":"Hello Json!"}'
+local function route(method, target, head, body)
+	local path = target:match("^[^?]*")
+	if method == "GET" and path == "/utf8test" then return response(200, "text/plain; charset=utf-8", "Hello utf8") end
+	if method == "GET" and path == "/html" then return response(200, "text/html; charset=utf-8", "<html>\n<body>Basic CLI HTTP test</body>\n</html>") end
+	if method == "GET" and path == "/invalid-json" then return response(200, "application/json", "not-json") end
+	if method == "GET" and path == "/invalid-utf8" then return response(200, "application/octet-stream", "\255") end
+	if method == "POST" and path == "/echo-json" then return response(200, "application/json", body) end
+	local code = path:match("^/x/status/(%d%d%d)$")
+	if code then return response(tonumber(code), "text/plain", "status " .. code) end
+	if path == "/x/echo" then
+		local lines = {}
+		for line in head:gmatch("\r\n([^\r\n]*)") do
+			local name, value = line:match("^([^:]+):[ \t]*(.-)[ \t]*$")
+			if name then lines[#lines + 1] = name:lower() .. ": " .. value end
+		end
+		table.sort(lines)
+		return response(200, "text/plain", method .. " " .. target .. "\n" .. table.concat(lines, "\n") .. "\n\n" .. body)
+	end
+	if path == "/x/headers" then
+		return response(200, "text/plain", "headers", { "X-Multi: one", "x-other: 2", "X-Multi: two", "x-bin: caf\195\169", "x-tab: a\tb" })
+	end
+	local ms = path:match("^/x/slow/(%d+)$")
+	if ms then return response(200, "text/plain", "slow", nil, tonumber(ms)) end
+	return response(200, "application/json", DEFAULT_JSON)
+end
+
+local function encode(r, close)
+	local lines = { ("HTTP/1.1 %d %s"):format(r.status, REASONS[r.status] or "Unknown") }
+	for _, h in ipairs(r.headers) do lines[#lines + 1] = h end
+	lines[#lines + 1] = "content-type: " .. r.type
+	lines[#lines + 1] = "content-length: " .. #r.body
+	if close then lines[#lines + 1] = "connection: close" end
+	lines[#lines + 1] = "date: " .. http_date()
+	return table.concat(lines, "\r\n") .. "\r\n\r\n" .. r.body
+end
+
+local ts = ffi.new("struct timespec")
+local function now_ms()
+	C.clock_gettime(1, ts) -- CLOCK_MONOTONIC
+	return tonumber(ts.tv_sec) * 1000 + math.floor(tonumber(ts.tv_nsec) / 1000000)
+end
+
+
+-- One complete request at the front of `pending`, or nil when more bytes are
+-- needed: method, path, body, whether to close after answering, and the rest.
+local function next_request(pending)
+	local head_end = pending:find("\r\n\r\n", 1, true)
+	if not head_end then return nil end
+	local head = pending:sub(1, head_end - 1)
+	local method, target, version = head:match("^(%u+) (%S+) HTTP/(%d%.%d)")
+	if not method then return false end
+	local length, close = 0, version == "1.0"
+	for line in (head .. "\r\n"):gmatch("([^\r\n]*)\r\n") do
+		local name, value = line:match("^([^:]+):%s*(.-)%s*$")
+		if name then
+			name = name:lower()
+			if name == "content-length" then length = tonumber(value) or 0 end
+			if name == "connection" then close = value:lower() == "close" end
+		end
+	end
+	local body_start = head_end + 4
+	if #pending < body_start - 1 + length then return nil end
+	return method, target, head, pending:sub(body_start, body_start + length - 1), close, pending:sub(body_start + length)
+end
+
+local function serve_http()
+	local listeners = {}
+	listeners[#listeners + 1] = listener(AF_INET6, "::1", 9000)
+	listeners[#listeners + 1] = listener(AF_INET, "127.0.0.1", 9000) or die("bind 127.0.0.1:9000")
+	local is_listener = {}
+	for _, fd in ipairs(listeners) do is_listener[fd] = true end
+	local clients = {} -- fd -> bytes received but not yet answered
+	local delayed = {} -- fd -> { due = ms, bytes = response, close = bool }
+
+	local function drop(fd)
+		C.close(fd)
+		clients[fd], delayed[fd] = nil, nil
+	end
+	-- Answer every complete request buffered for fd, in order; a delayed
+	-- response holds the requests behind it until it has been sent.
+	local function answer(fd)
+		while true do
+			local method, target, head, body, close, rest = next_request(clients[fd])
+			if method == nil then return end
+			if method == false then
+				send_all(fd, "HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+				return drop(fd)
+			end
+			clients[fd] = rest
+			local r = route(method, target, head, body)
+			if r.delay > 0 then
+				delayed[fd] = { due = now_ms() + r.delay, bytes = encode(r, close), close = close }
+				return
+			end
+			if not send_all(fd, encode(r, close)) or close then return drop(fd) end
+		end
+	end
+
+	while true do
+		local fds = {}
+		for _, fd in ipairs(listeners) do fds[#fds + 1] = fd end
+		for fd in pairs(clients) do if not delayed[fd] then fds[#fds + 1] = fd end end
+		local timeout, now = -1, now_ms()
+		for _, d in pairs(delayed) do
+			local left = math.max(0, d.due - now)
+			if timeout < 0 or left < timeout then timeout = left end
+		end
+		local pfds = ffi.new("struct pollfd[?]", #fds)
+		for i, fd in ipairs(fds) do pfds[i - 1].fd, pfds[i - 1].events = fd, POLLIN end
+		local ready = C.poll(pfds, #fds, timeout)
+		now = now_ms()
+		local due = {}
+		for fd, d in pairs(delayed) do if d.due <= now then due[#due + 1] = fd end end
+		for _, fd in ipairs(due) do
+			local d = delayed[fd]
+			delayed[fd] = nil
+			if not send_all(fd, d.bytes) or d.close then drop(fd) else answer(fd) end
+		end
+		if ready > 0 then
+			for i, fd in ipairs(fds) do
+				if pfds[i - 1].revents ~= 0 then
+					if is_listener[fd] then
+						local conn = C.accept(fd, nil, nil)
+						if conn >= 0 then clients[conn] = "" end
+					elseif clients[fd] then
+						local data = receive(fd)
+						if data then
+							clients[fd] = clients[fd] .. data
+							answer(fd)
+						else
+							drop(fd)
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+-- A name server that never answers: queries (UDP datagrams, TCP streams)
+-- are read and dropped.
+local function serve_dns()
+	local udp = listener(AF_INET, "127.0.0.1", 53, SOCK_DGRAM) or die("bind udp 127.0.0.1:53")
+	local tcp = listener(AF_INET, "127.0.0.1", 53) or die("bind tcp 127.0.0.1:53")
+	local conns = {}
+	while true do
+		local fds = { udp, tcp }
+		for fd in pairs(conns) do fds[#fds + 1] = fd end
+		local pfds = ffi.new("struct pollfd[?]", #fds)
+		for i, fd in ipairs(fds) do pfds[i - 1].fd, pfds[i - 1].events = fd, POLLIN end
+		if C.poll(pfds, #fds, -1) > 0 then
+			for i, fd in ipairs(fds) do
+				if pfds[i - 1].revents ~= 0 then
+					if fd == tcp then
+						local conn = C.accept(tcp, nil, nil)
+						if conn >= 0 then conns[conn] = true end
+					elseif fd == udp then
+						C.recv(udp, buf, 65536, 0)
+					elseif not receive(fd) then
+						C.close(fd)
+						conns[fd] = nil
+					end
+				end
+			end
+		end
+	end
+end
+
+local kind = arg[1]
+if kind == "tcp" then serve_tcp() elseif kind == "http" then serve_http() elseif kind == "dns" then serve_dns() end
+io.stderr:write("usage: helper_server tcp|http|dns\n")
+os.exit(2)

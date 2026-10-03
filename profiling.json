@@ -1,0 +1,1061 @@
+{
+  "history_url": "file:///var/lib/performance-profiling",
+  "project": "roc_luajit",
+  "cases": [
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dec_math",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "bounds": [
+        1.5,
+        2.8
+      ],
+      "name": "dec_math_cpu_growth_1c",
+      "definition": "dec_math-cpu-growth-1c-v3"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dec_math",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "bounds": [
+        1.5,
+        2.8
+      ],
+      "name": "dec_math_cpu_growth_12c",
+      "definition": "dec_math-cpu-growth-12c-v3"
+    },
+    {
+      "mode": "mg",
+      "metric": "total_bytes",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dec_math",
+        "memory",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "bounds": [
+        1.8,
+        2.2
+      ],
+      "name": "dec_math_alloc_growth",
+      "definition": "dec_math-alloc-growth-v3",
+      "residual_allowance": 65536
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dec_math",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        8
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dec_math_cpu_fixed_1c",
+      "definition": "dec_math-cpu-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dec_math",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        8
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dec_math_cpu_fixed_12c",
+      "definition": "dec_math-cpu-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dec_math",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        8
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dec_math_wall_fixed_1c",
+      "definition": "dec_math-wall-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dec_math",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        8
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dec_math_wall_fixed_12c",
+      "definition": "dec_math-wall-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dec_math",
+        "steady",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        8
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dec_math_cpu_steady_1c",
+      "definition": "dec_math-cpu-steady-1c-v1"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dict_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        2,
+        4,
+        8,
+        16
+      ],
+      "bounds": [
+        1.5,
+        2.8
+      ],
+      "policy": {
+        "percent": 30
+      },
+      "name": "dict_ops_cpu_growth_1c",
+      "definition": "dict_ops-cpu-growth-1c-v3"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dict_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        2,
+        4,
+        8,
+        16
+      ],
+      "bounds": [
+        1.5,
+        2.8
+      ],
+      "policy": {
+        "percent": 30
+      },
+      "name": "dict_ops_cpu_growth_12c",
+      "definition": "dict_ops-cpu-growth-12c-v3"
+    },
+    {
+      "mode": "mg",
+      "metric": "total_bytes",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dict_ops",
+        "memory",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        2,
+        4,
+        8,
+        16
+      ],
+      "bounds": [
+        1.8,
+        2.2
+      ],
+      "name": "dict_ops_alloc_growth",
+      "definition": "dict_ops-alloc-growth-v3",
+      "residual_allowance": 65536
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dict_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dict_ops_cpu_fixed_1c",
+      "definition": "dict_ops-cpu-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dict_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dict_ops_cpu_fixed_12c",
+      "definition": "dict_ops-cpu-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dict_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dict_ops_wall_fixed_1c",
+      "definition": "dict_ops-wall-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dict_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dict_ops_wall_fixed_12c",
+      "definition": "dict_ops-wall-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "dict_ops",
+        "steady",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "dict_ops_cpu_steady_1c",
+      "definition": "dict_ops-cpu-steady-1c-v1"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "fib",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        5,
+        10,
+        20,
+        40
+      ],
+      "bounds": [
+        1.5,
+        2.8
+      ],
+      "name": "fib_cpu_growth_1c",
+      "definition": "fib-cpu-growth-1c-v3"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "fib",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        5,
+        10,
+        20,
+        40
+      ],
+      "bounds": [
+        1.5,
+        2.8
+      ],
+      "name": "fib_cpu_growth_12c",
+      "definition": "fib-cpu-growth-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "mg",
+      "metric": "total_bytes",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "fib",
+        "memory",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000
+      ],
+      "name": "fib_alloc_fixed",
+      "definition": "fib-alloc-fixed-v3",
+      "residual_allowance": 65536,
+      "policy": {
+        "absolute_floor": 65536
+      }
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "fib",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "fib_cpu_fixed_1c",
+      "definition": "fib-cpu-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "fib",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "fib_cpu_fixed_12c",
+      "definition": "fib-cpu-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "fib",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "fib_wall_fixed_1c",
+      "definition": "fib-wall-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "fib",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "fib_wall_fixed_12c",
+      "definition": "fib-wall-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "fib",
+        "steady",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "fib_cpu_steady_1c",
+      "definition": "fib-cpu-steady-1c-v1"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "list_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        5,
+        10,
+        20,
+        40
+      ],
+      "bounds": [
+        1.5,
+        2.8
+      ],
+      "name": "list_ops_cpu_growth_1c",
+      "definition": "list_ops-cpu-growth-1c-v3"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "list_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        5,
+        10,
+        20,
+        40
+      ],
+      "bounds": [
+        1.5,
+        2.8
+      ],
+      "name": "list_ops_cpu_growth_12c",
+      "definition": "list_ops-cpu-growth-12c-v3"
+    },
+    {
+      "mode": "mg",
+      "metric": "total_bytes",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "list_ops",
+        "memory",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        5,
+        10,
+        20,
+        40
+      ],
+      "bounds": [
+        1.8,
+        2.2
+      ],
+      "name": "list_ops_alloc_growth",
+      "definition": "list_ops-alloc-growth-v3",
+      "residual_allowance": 65536
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "list_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "list_ops_cpu_fixed_1c",
+      "definition": "list_ops-cpu-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "list_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "list_ops_cpu_fixed_12c",
+      "definition": "list_ops-cpu-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "list_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "list_ops_wall_fixed_1c",
+      "definition": "list_ops-wall-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "list_ops",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "list_ops_wall_fixed_12c",
+      "definition": "list_ops-wall-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "list_ops",
+        "steady",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        40
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "list_ops_cpu_steady_1c",
+      "definition": "list_ops-cpu-steady-1c-v1"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "str_build",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        2,
+        4,
+        8,
+        16
+      ],
+      "bounds": [
+        1.5,
+        3.3
+      ],
+      "policy": {
+        "percent": 50
+      },
+      "name": "str_build_cpu_growth_1c",
+      "definition": "str_build-cpu-growth-1c-v3"
+    },
+    {
+      "mode": "cg",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "str_build",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        2,
+        4,
+        8,
+        16
+      ],
+      "bounds": [
+        1.5,
+        3.3
+      ],
+      "policy": {
+        "percent": 50
+      },
+      "name": "str_build_cpu_growth_12c",
+      "definition": "str_build-cpu-growth-12c-v3"
+    },
+    {
+      "mode": "mg",
+      "metric": "total_bytes",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "str_build",
+        "memory",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        2,
+        4,
+        8,
+        16
+      ],
+      "bounds": [
+        1.8,
+        2.3
+      ],
+      "name": "str_build_alloc_growth",
+      "definition": "str_build-alloc-growth-v3",
+      "residual_allowance": 65536
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "str_build",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "str_build_cpu_fixed_1c",
+      "definition": "str_build-cpu-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "str_build",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "str_build_cpu_fixed_12c",
+      "definition": "str_build-cpu-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "str_build",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "str_build_wall_fixed_1c",
+      "definition": "str_build-wall-fixed-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "wall_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "str_build",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "str_build_wall_fixed_12c",
+      "definition": "str_build-wall-fixed-12c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "cpu_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "processes": 3,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "str_build",
+        "steady",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        16
+      ],
+      "bounds": [
+        1,
+        1000000000000
+      ],
+      "name": "str_build_cpu_steady_1c",
+      "definition": "str_build-cpu-steady-1c-v1"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "startup_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 1,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "startup",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        1
+      ],
+      "bounds": [
+        1,
+        100000000000
+      ],
+      "name": "startup_1c",
+      "definition": "startup-1c-v3"
+    },
+    {
+      "comparison": "absolute",
+      "mode": "bm",
+      "metric": "startup_ns",
+      "ready_marker": "performance-ready/v1",
+      "cores": 12,
+      "command": [
+        "luajit_backend/bench/profile/run",
+        "startup",
+        "time",
+        "{sizes}",
+        "{seed}"
+      ],
+      "sizes": [
+        1
+      ],
+      "bounds": [
+        1,
+        100000000000
+      ],
+      "name": "startup_12c",
+      "definition": "startup-12c-v3"
+    }
+  ],
+  "identity": {
+    "concurrency": 1,
+    "build_mode": "luajit-jit",
+    "runtime": "LuaJIT-2.1"
+  },
+  "schema": "performance-project/v1"
+}

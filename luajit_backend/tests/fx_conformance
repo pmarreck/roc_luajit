@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# End-to-end conformance for `roc build --target=luajit` on the fx test platform
+# (test/fx, LuaJIT host test/fx/platform/host.lua). For every IO spec in
+# src/cli/test/fx_test_specs.zig the app is built natively (--opt=dev, the
+# oracle, linked with host.zig) and for LuaJIT, both run with `--test <spec>`
+# (each host checks the spec's stdin/stdout/stderr sequence itself), and their
+# stdout bytes, stderr bytes and exit status are compared.
+#
+# Work runs in parallel (ROC_LUAJIT_JOBS processes, default: every CPU): each
+# file is built once, then every spec runs, each writing its verdict to its
+# own directory; the report is assembled in spec order.
+#
+# Usage: fx_conformance [ROC] [max-unsupported=N] [FILTER]
+# Exit status: the number of diverging specs, plus 1 if the unsupported count
+# exceeds the ratchet.
+set -u
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+
+# Build one file: `--build WORK ROC FILE` writes WORK/build/<name>/{native,app.lua}
+# and a `built` verdict (both, native-only or neither).
+if [ "${1:-}" = "--build" ]; then
+	work="$2" roc="$3" file="$4"
+	d="$work/build/$(printf %s "$file" | sha256sum | cut -c1-16)"
+	mkdir -p "$d"
+	if ! (cd "$root" && timeout 300 "$roc" build --opt=dev --no-cache "$file" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err"); then
+		echo neither >"$d/built"
+		exit 0
+	fi
+	if (cd "$root" && timeout 300 "$roc" build --target=luajit --no-cache "$file" --output="$d/app.lua" >"$d/lb.out" 2>"$d/lb.err"); then
+		echo both >"$d/built"
+	else
+		echo native-only >"$d/built"
+	fi
+	exit 0
+fi
+
+# Run one spec: `--run WORK N` reads WORK/specs/N/{file,spec} and writes its
+# verdict (agreed, diverged, unsupported or skipped) and report.
+if [ "${1:-}" = "--run" ]; then
+	work="$2" n="$3"
+	s="$work/specs/$n"
+	file="$(cat "$s/file")" spec="$(cat "$s/spec")"
+	name="$(basename "$file" .roc)"
+	b="$work/build/$(printf %s "$file" | sha256sum | cut -c1-16)"
+	case "$(cat "$b/built")" in
+		neither) echo skipped >"$s/verdict"; exit 0 ;;
+		native-only)
+			echo unsupported >"$s/verdict"
+			printf '  unsupported %s: %s\n' "$name" "$(grep -m1 -E 'Error|error' "$b/lb.err" | cut -c1-160)" >"$s/report"
+			exit 0 ;;
+	esac
+	(cd "$b" && timeout 60 ./native --test "$spec" </dev/null >"$s/n.out" 2>"$s/n.err"); nrc=$?
+	(cd "$b" && timeout 60 luajit ./app.lua --test "$spec" </dev/null >"$s/l.out" 2>"$s/l.err"); lrc=$?
+	if grep -q "does not provide hosted function" "$s/l.err"; then
+		# A hosted function the LuaJIT host lacks: a stated coverage gap.
+		echo unsupported >"$s/verdict"
+		printf '  unsupported %s: %s\n' "$name" "$(grep -m1 -o "does not provide hosted function [a-z_]*" "$s/l.err")" >"$s/report"
+	elif [ "$nrc" -eq "$lrc" ] && cmp -s "$s/n.out" "$s/l.out" && cmp -s "$s/n.err" "$s/l.err"; then
+		echo agreed >"$s/verdict"
+	else
+		echo diverged >"$s/verdict"
+		{
+			printf '  DIVERGED %s (spec %d): exit native=%d luajit=%d\n' "$name" "$n" "$nrc" "$lrc"
+			diff <(head -c 2000 "$s/n.out") <(head -c 2000 "$s/l.out") | head -6 | sed 's/^/    stdout /'
+			diff <(head -c 2000 "$s/n.err") <(head -c 2000 "$s/l.err") | head -8 | sed 's/^/    stderr /'
+		} >"$s/report"
+	fi
+	exit 0
+fi
+
+roc="$root/zig-out/bin/roc"
+max_unsupported=""
+filter=""
+for a in "$@"; do
+	case "$a" in
+		max-unsupported=*) max_unsupported="${a#max-unsupported=}" ;;
+		*/roc | */fake_roc) roc="$a" ;;
+		*) filter="$a" ;;
+	esac
+done
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/fx_conformance.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+jobs="${ROC_LUAJIT_JOBS:-$(nproc)}"
+
+# Record the selected specs, numbered in spec order.
+n=0
+declare -A files
+while IFS=$'\1' read -r -d '' file spec; do
+	case "$file" in *"$filter"*) ;; *) continue ;; esac
+	n=$((n + 1))
+	mkdir -p "$work/specs/$n"
+	printf '%s' "$file" >"$work/specs/$n/file"
+	printf '%s' "$spec" >"$work/specs/$n/spec"
+	files[$file]=1
+done < <(luajit "$here/fx_specs.lua" "$root/src/cli/test/fx_test_specs.zig" 2>/dev/null)
+
+if [ "$n" -gt 0 ]; then
+	printf '%s\0' "${!files[@]}" | xargs -0 -P "$jobs" -n 1 "${BASH_SOURCE[0]}" --build "$work" "$roc"
+	seq 1 "$n" | xargs -P "$jobs" -n 1 "${BASH_SOURCE[0]}" --run "$work"
+fi
+
+agreed=0 diverged=0 unsupported=0 skipped=0
+for i in $(seq 1 "$n"); do
+	s="$work/specs/$i"
+	case "$(cat "$s/verdict" 2>/dev/null)" in
+		agreed) agreed=$((agreed + 1)) ;;
+		diverged) diverged=$((diverged + 1)) ;;
+		unsupported) unsupported=$((unsupported + 1)) ;;
+		skipped) skipped=$((skipped + 1)) ;;
+		*) diverged=$((diverged + 1)); printf '  NO VERDICT spec %d\n' "$i" ;;
+	esac
+	if [ -f "$s/report" ]; then cat "$s/report"; fi
+done
+
+printf 'fx_conformance: %d agreed, %d diverged, %d unsupported, %d skipped (native build failed)\n' "$agreed" "$diverged" "$unsupported" "$skipped"
+status=$diverged
+if [ -n "$max_unsupported" ] && [ "$unsupported" -gt "$max_unsupported" ]; then
+	printf 'fx_conformance: unsupported %d exceeds the ratchet %d\n' "$unsupported" "$max_unsupported"
+	status=$((status + 1))
+fi
+exit "$status"

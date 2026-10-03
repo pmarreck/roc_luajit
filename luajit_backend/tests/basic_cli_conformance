@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# basic-cli 0.23.0 apps built natively (--opt=dev, linked with basic-cli's own
+# Rust host) and with --target=luajit (the bundled LuaJIT host), run through
+# basic-cli's test cases (basic_cli_cases.lua). Builds use the packages the
+# project flake fetched ($ROC_LUAJIT_BASIC_CLI_0_23_0, $ROC_LUAJIT_ROC_HTTP_1_0_0)
+# in place of their URLs, so nothing is downloaded. Builds run in parallel
+# (ROC_LUAJIT_JOBS processes, default: every CPU).
+#
+# A second corpus, luajit_backend/tests/basic_cli_extra, holds this
+# repository's own apps in the same test_spec.json format (edge cases the
+# upstream cases do not reach); every one of its cases must agree.
+#
+# Usage: basic_cli_conformance [ROC] [max-unsupported=N] [FILTER]
+set -u
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+corpus="$root/luajit_backend/demos/basic-cli"
+extra="$root/luajit_backend/tests/basic_cli_extra"
+basic_cli_url="https://github.com/roc-lang/basic-cli/releases/download/0.23.0/GNN5tt2gKdX4dhawg4915C4YB193woHFdcCkz31fhGxv.tar.zst"
+http_url="https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
+
+# Build one app: `--build WORK ROC CORPUS APP` writes
+# WORK/build/<name>/{native,app.lua} and a `built` verdict (both, native-only
+# or neither).
+if [ "${1:-}" = "--build" ]; then
+	work="$2" roc="$3" corpus="$4" app="$5"
+	d="$work/build/$(basename "$app" .roc)"
+	mkdir -p "$d"
+	replace=(--replace-dep "$basic_cli_url" "$ROC_LUAJIT_BASIC_CLI_0_23_0/main.roc" --replace-dep "$http_url" "$ROC_LUAJIT_ROC_HTTP_1_0_0/main.roc")
+	built() { [ "$1" -eq 0 ] || { [ "$1" -eq 2 ] && grep -qh "^0 errors and" "$2" "$3"; }; }
+	(cd "$d" && timeout 300 "$roc" build --opt=dev --no-cache "${replace[@]}" "$corpus/$app" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err") 2>"$d/nb.shell"
+	if ! built $? "$d/nb.out" "$d/nb.err"; then echo neither >"$d/built"; exit 0; fi
+	(cd "$d" && timeout 300 "$roc" build --target=luajit --no-cache "${replace[@]}" "$corpus/$app" --output="$d/app.lua" >"$d/lb.out" 2>"$d/lb.err") 2>"$d/lb.shell"
+	if built $? "$d/lb.out" "$d/lb.err"; then echo both >"$d/built"; else echo native-only >"$d/built"; fi
+	exit 0
+fi
+
+for var in ROC_LUAJIT_BASIC_CLI_0_23_0 ROC_LUAJIT_ROC_HTTP_1_0_0; do
+	[ -n "${!var:-}" ] || { echo "basic_cli_conformance: \$$var is unset; run inside the project dev shell"; exit 2; }
+done
+roc="$root/zig-out/bin/roc"
+pass=()
+for a in "$@"; do
+	case "$a" in
+		*/roc) roc="$a" ;;
+		*) pass+=("$a") ;;
+	esac
+done
+filter=""
+for a in "${pass[@]}"; do case "$a" in max-unsupported=*) ;; *) filter="$a" ;; esac; done
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/basic_cli_conformance.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+jobs="${ROC_LUAJIT_JOBS:-$(nproc)}"
+# Run one corpus in WORK/NAME: build its apps in parallel, then its cases.
+run_corpus() { # NAME CORPUS ARGS...
+	local w="$work/$1" c="$2"
+	shift 2
+	mkdir -p "$w"
+	jq -r '.apps[] | select(.platforms.linux.run != false) | .path' "$c/scripts/test_spec.json" |
+		grep -F -- "$filter" | xargs -r -P "$jobs" -n 1 "${BASH_SOURCE[0]}" --build "$w" "$roc" "$c"
+	luajit "$here/basic_cli_cases.lua" "$w" "$c" "$@"
+}
+run_corpus upstream "$corpus" "${pass[@]}"
+status=$?
+extra_args=(max-unsupported=0)
+[ -n "$filter" ] && extra_args+=("$filter")
+run_corpus extra "$extra" "${extra_args[@]}"
+exit $((status + $?))

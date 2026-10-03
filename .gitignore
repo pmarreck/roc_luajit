@@ -223,3 +223,11 @@ plan.md
 
 # Boxy status report—local planning doc, not committed
 report.md
+
+# Inter-agent messages (llmsend); never committed.
+/inbox/
+# Local code-review hand-off files.
+/REVIEW_BRIEF.md
+/REVIEW_FINDINGS.md
+# codescan index (local tool state).
+/.codescan/

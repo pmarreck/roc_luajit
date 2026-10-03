@@ -1,0 +1,64 @@
+{
+  "apps": [
+    {
+      "path": "apps/path_ops.roc",
+      "cases": [
+        {
+          "name": "path-ops"
+        }
+      ]
+    },
+    {
+      "path": "apps/cmd_ops.roc",
+      "cases": [
+        {
+          "name": "cmd-ops"
+        }
+      ]
+    },
+    {
+      "path": "apps/resource_drop.roc",
+      "cases": [
+        {
+          "name": "resource-drop"
+        }
+      ]
+    },
+    {
+      "path": "apps/tcp_ops.roc",
+      "cases": [
+        {
+          "name": "tcp-ops"
+        }
+      ]
+    },
+    {
+      "path": "apps/sqlite_ops.roc",
+      "cases": [
+        {
+          "name": "sqlite-ops"
+        }
+      ]
+    },
+    {
+      "path": "apps/http_ops.roc",
+      "cases": [
+        {
+          "name": "http-ops",
+          "helper": "http",
+          "timeout": 30
+        }
+      ]
+    },
+    {
+      "path": "apps/name_lookup_deadline.roc",
+      "cases": [
+        {
+          "name": "name-lookup-deadline",
+          "helper": "dns",
+          "timeout": 20
+        }
+      ]
+    }
+  ]
+}

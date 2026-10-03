@@ -1,0 +1,565 @@
+{
+  "stages": {
+    "fmt": true,
+    "check": true,
+    "test": true,
+    "build": true,
+    "run": true
+  },
+  "apps": [
+    {
+      "path": "examples/bytes-stdin-stdout.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "stdin": "someinput\n",
+          "stdout_contains": ["someinput\n"],
+          "stderr_contains": ["Copied 10 bytes from stdin to stdout."]
+        }
+      ]
+    },
+    {
+      "path": "examples/check-command.roc",
+      "platforms": { "windows": { "run": false } },
+      "reason": "Checks a Unix command is on the PATH",
+      "cases": [
+        {
+          "name": "happy",
+          "contains": [
+            "sh is available",
+            "definitely-not-a-real-command-xyz is not available"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/command-line-args.roc",
+      "cases": [
+        {
+          "name": "one-argument",
+          "args": ["foo"],
+          "contains": [
+            "program name:",
+            "received argument: foo",
+            "back to OsStr: OsStr.",
+            "argument 1 is valid UTF-8: foo"
+          ],
+          "regex": [
+            "program name: .*command-line-args(?:\\.exe)?",
+            "(?:Unix argument, bytes|Windows argument, UTF-16 code units): \\[102, 111, 111\\]"
+          ]
+        },
+        {
+          "name": "missing-argument",
+          "exit_code": 1,
+          "contains": ["Program exited with error: MissingArgument"]
+        }
+      ]
+    },
+    {
+      "path": "examples/command.roc",
+      "platforms": { "windows": { "run": false } },
+      "reason": "Runtime scenario invokes Unix commands",
+      "cases": [
+        {
+          "name": "happy",
+          "contains": ["Hello", "Command config: Cmd({", "Exit code: 1", "stdout_bytes: [72, 105, 10]"]
+        }
+      ]
+    },
+    {
+      "path": "examples/dir.roc",
+      "cases": [
+        {
+          "name": "workspace-lifecycle",
+          "temp_cwd": true,
+          "contains": ["Workspace entries:", "Workspace cleaned up."]
+        }
+      ]
+    },
+    {
+      "path": "examples/env-var.roc",
+      "cases": [
+        {
+          "name": "both-variables",
+          "env": { "EDITOR": "nano", "LETTERS": "a,c,e,j" },
+          "contains": [
+            "Your favorite editor is nano!",
+            "Your favorite letters are: a c e j"
+          ]
+        },
+        {
+          "name": "missing-editor",
+          "unset_env": ["EDITOR", "LETTERS"],
+          "exit_code": 1,
+          "contains": ["VarNotFound(OsStr."]
+        },
+        {
+          "name": "missing-letters",
+          "unset_env": ["LETTERS"],
+          "env": { "EDITOR": "nano" },
+          "exit_code": 1,
+          "contains": ["VarNotFound(OsStr."]
+        }
+      ]
+    },
+    {
+      "path": "examples/error-handling.roc",
+      "cases": [
+        {
+          "name": "handled-not-found",
+          "contains": [
+            "(Expected ✅) error: Path not found (NotFound): nonexistent-file.txt",
+            "(Expected ✅) error: Path is a directory: examples",
+            "(Expected ✅) error: Path is not a directory: LICENSE",
+            "test-file.txt contains: Hello from error-handling example!"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/file-accessed-modified-created-time.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "args": ["{root}/LICENSE"],
+          "regex": [
+            "LICENSE file time metadata:\\n    Modified: [0-9]+ ms since epoch\\n    Accessed: [0-9]+ ms since epoch\\n    Created: ([0-9]+ ms since epoch|unsupported)"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/file-permissions.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "args": ["{root}/LICENSE"],
+          "contains": [
+            "LICENSE file permissions:",
+            "Executable: False",
+            "Readable: True",
+            "Writable: True"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/file-read-binary.roc",
+      "cases": [
+        {
+          "name": "empty",
+          "args": [
+            "{root}/tests/fixtures/binary-reader/empty.bin"
+          ],
+          "stdout_contains": [
+            "Header bytes: []",
+            "Read 0 bytes"
+          ]
+        },
+        {
+          "name": "short",
+          "args": [
+            "{root}/tests/fixtures/binary-reader/short.bin"
+          ],
+          "stdout_contains": [
+            "Header bytes: [0, 255, 128, 10, 1, 2, 3, 4]",
+            "Read 8 bytes"
+          ]
+        },
+        {
+          "name": "multi-chunk",
+          "args": [
+            "{root}/tests/fixtures/binary-reader/multi-chunk.bin"
+          ],
+          "stdout_contains": [
+            "Header bytes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]",
+            "Read 65543 bytes"
+          ]
+        },
+        {
+          "name": "missing-argument",
+          "exit_code": 1,
+          "contains": [
+            "MissingPathArgument"
+          ]
+        },
+        {
+          "name": "missing-file",
+          "args": [
+            "missing.bin"
+          ],
+          "temp_cwd": true,
+          "exit_code": 1,
+          "contains": [
+            "PathErr(NotFound, Path."
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/file-read-buffered.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "regex": [
+            "Done reading file: \\{ bytes_read: [0-9]+, lines_read: [0-9]+ \\}"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/file-read-write.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "temp_cwd": true,
+          "contains": [
+            "Writing a string to out.txt",
+            "I read the file back. Its contents are: \"a string!\""
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/file-replace.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "temp_cwd": true,
+          "contains": [
+            "After replacing: \"Goodbye, World! Goodbye, Roc!\""
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/file-size.roc",
+      "cases": [
+        {
+          "name": "existing-file",
+          "args": ["{root}/LICENSE"],
+          "regex": ["LICENSE is [0-9]+ bytes"]
+        },
+        {
+          "name": "missing-file",
+          "args": ["missing.txt"],
+          "temp_cwd": true,
+          "exit_code": 1,
+          "contains": ["PathErr(NotFound, Path."]
+        }
+      ]
+    },
+    {
+      "path": "examples/hello-world.roc",
+      "cases": [{ "name": "happy", "contains": ["Hello, World!"] }]
+    },
+    {
+      "path": "examples/hello.roc",
+      "cases": [
+        { "name": "default-name", "contains": ["Hello, friend, from basic-cli!"] },
+        { "name": "given-name", "args": ["Roc"], "contains": ["Hello, Roc, from basic-cli!"] }
+      ]
+    },
+    {
+      "path": "examples/http-client.roc",
+      "cases": [
+        {
+          "name": "server-available",
+          "helper": "http",
+          "timeout": 15,
+          "contains": [
+            "I received 'Hello utf8' from the server.",
+            "send_json! echoed: { foo: \"Hello Json!\" }.",
+            "invalid UTF-8 was rejected.",
+            "invalid request URL was rejected."
+          ]
+        },
+        {
+          "name": "connection-refused",
+          "exit_code": 1,
+          "contains": ["GetUtf8Failed"]
+        }
+      ]
+    },
+    {
+      "path": "examples/http-simple.roc",
+      "cases": [
+        {
+          "name": "server-available",
+          "helper": "http",
+          "timeout": 15,
+          "contains": [
+            "I received 'Hello utf8' from the server.",
+            "<body>Basic CLI HTTP test</body>"
+          ]
+        },
+        {
+          "name": "connection-refused",
+          "exit_code": 1,
+          "contains": ["GetUtf8Failed"]
+        }
+      ]
+    },
+    {
+      "path": "examples/locale.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "regex": [
+            "The most preferred locale for this system or application: .+",
+            "All available locales for this system or application: \\[.*\\]"
+          ],
+          "contains": ["Locale JSON example: \"en-US\""]
+        }
+      ]
+    },
+    {
+      "path": "examples/path.roc",
+      "cases": [
+        {
+          "name": "existing-source",
+          "args": ["{source}"],
+          "contains": ["Debug: Path.", "Filename: path.roc", "Extension: roc", "Type: IsFile"]
+        }
+      ]
+    },
+    {
+      "path": "examples/print.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "stdout_contains": [
+            "Hello, world!",
+            "No newline after me.Foo",
+            "Baz"
+          ],
+          "stderr_contains": ["Hello, error!", "Err with no newline after."]
+        }
+      ]
+    },
+    {
+      "path": "examples/random.roc",
+      "cases": [
+        {
+          "name": "happy",
+          "regex": ["Random U64 seed is: [0-9]+", "Random U32 seed is: [0-9]+"]
+        }
+      ]
+    },
+    {
+      "path": "examples/sqlite-basic.roc",
+      "cases": [
+        {
+          "name": "existing-database",
+          "env": { "DB_PATH": "{root}/examples/todos.db" },
+          "contains": ["All Todos:", "Share my ❤️  for Roc", "Completed Todos:"]
+        },
+        {
+          "name": "cannot-open-database",
+          "env": { "DB_PATH": "{root}/missing/sqlite.db" },
+          "exit_code": 1,
+          "contains": ["QueryTodosFailed(SqliteErr(CanNotOpen"]
+        }
+      ]
+    },
+    {
+      "path": "examples/sqlite-everything.roc",
+      "cases": [
+        {
+          "name": "existing-database",
+          "fixtures": [
+            {
+              "source": "examples/todos2.db",
+              "target": "examples/todos2.e2e.db"
+            }
+          ],
+          "env": { "DB_PATH": "{root}/examples/todos2.e2e.db" },
+          "contains": [
+            "Row count: 3",
+            "Todos sorted by length of task description:"
+          ]
+        },
+        {
+          "name": "cannot-open-database",
+          "env": { "DB_PATH": "{root}/missing/sqlite.db" },
+          "exit_code": 1,
+          "contains": ["QueryAllTodosFailed(SqliteErr(CanNotOpen"]
+        }
+      ]
+    },
+    {
+      "path": "examples/stdin-basic.roc",
+      "cases": [
+        {
+          "name": "two-lines",
+          "stdin": "John\nDoe\n",
+          "contains": [
+            "What's your first name?",
+            "What's your last name?",
+            "Hi, John Doe! 👋"
+          ]
+        },
+        {
+          "name": "end-of-input",
+          "exit_code": 1,
+          "stderr_contains": ["MissingFirstName"]
+        }
+      ]
+    },
+    {
+      "path": "examples/stdin-pipe.roc",
+      "cases": [
+        {
+          "name": "valid-utf8",
+          "stdin": "hey",
+          "contains": ["This is what you piped in: \"hey\""]
+        },
+        {
+          "name": "invalid-utf8",
+          "stdin_hex": "fffe",
+          "exit_code": 1,
+          "contains": ["BadUtf8({ index: 0, problem: InvalidStartByte })"]
+        }
+      ]
+    },
+    {
+      "path": "examples/tcp-client.roc",
+      "cases": [
+        {
+          "name": "server-available",
+          "helper": "tcp",
+          "stdin": "Hi\n",
+          "contains": ["Connected!", "< Hi"]
+        },
+        {
+          "name": "connection-refused",
+          "exit_code": 1,
+          "contains": ["ConnectFailed"]
+        }
+      ]
+    },
+    {
+      "path": "examples/temp-dir.roc",
+      "cases": [{ "name": "happy", "regex": ["The temp dir path is .+"] }]
+    },
+    {
+      "path": "examples/terminal-app-snake.roc",
+      "platforms": { "windows": { "run": false } },
+      "reason": "Python standard library has no Windows ConPTY support",
+      "cases": [
+        {
+          "name": "quit-command",
+          "pty": true,
+          "stdin": "q",
+          "contains": ["Game Over"]
+        }
+      ]
+    },
+    {
+      "path": "examples/time.roc",
+      "cases": [
+        {
+          "name": "one-second-sleep",
+          "timeout": 10,
+          "regex": [
+            "Started at [0-9]{4}-[0-9]{2}-[0-9]{2}T",
+            "Completed in [0-9]+ ms \\([0-9]+ ns\\)"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/tty.roc",
+      "platforms": { "windows": { "run": false } },
+      "reason": "Python standard library has no Windows ConPTY support",
+      "cases": [
+        {
+          "name": "raw-mode",
+          "pty": true,
+          "stdin": "q",
+          "contains": [
+            "Tty: enabling raw mode",
+            "Tty: disabling raw mode",
+            "Read 1 byte(s)."
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/url.roc",
+      "cases": [
+        {
+          "name": "search-request",
+          "contains": [
+            "Request URL: https://api.example.com/v1/search?q=roc+lang&page=1#results",
+            "Debug URL: Url(\"https://api.example.com/v1/search?q=roc+lang&page=1#results\")",
+            "JSON URL: \"https://api.example.com/v1/search?q=roc+lang&page=1#results\""
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/filesystem-tools.roc",
+      "cases": [
+        {
+          "name": "prepare-release",
+          "args": [
+            "{root}/tests/resource-lifetimes",
+            "release"
+          ],
+          "temp_cwd": true,
+          "stdout_contains": [
+            "Release prepared at "
+          ]
+        },
+        {
+          "name": "missing-paths",
+          "exit_code": 1,
+          "contains": [
+            "MissingPaths"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "examples/process-control.roc",
+      "cases": [
+        {
+          "name": "successful-build",
+          "args": [
+            "{python}",
+            "-c",
+            "import sys; print(\"compiling\"); print(\"warning: example\", file=sys.stderr)"
+          ],
+          "stdout_contains": [
+            "compiling",
+            "Build completed successfully"
+          ],
+          "stderr_contains": [
+            "warning: example"
+          ]
+        },
+        {
+          "name": "failed-build",
+          "args": [
+            "{python}",
+            "-c",
+            "raise SystemExit(7)"
+          ],
+          "exit_code": 1,
+          "contains": [
+            "BuildFailed(Exited(7))"
+          ]
+        },
+        {
+          "name": "missing-command",
+          "exit_code": 1,
+          "contains": [
+            "MissingCommand"
+          ]
+        }
+      ]
+    }
+  ]
+}

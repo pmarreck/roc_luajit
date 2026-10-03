@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Informational comparison (never a gate): the ./bm programs against idiomatic
+# ports to CPython, PyPy, Ruby (YJIT) and Elixir in this directory. Every
+# implementation must print exactly what the native Roc build prints, or its
+# row is marked wrong and not timed. Each runs under hyperfine at the
+# benchmark's scale K and at 4K arguments:
+#   total  wall time at K, everything included (startup too)
+#   work   (T(4K) - T(K)) / 3, the time per K of work with startup cancelled
+# Both are shown as a ratio to native Roc (--opt=speed). The runtimes come
+# from the project's pinned nixpkgs, not the dev shell.
+#
+# --mult=M multiplies K (both sizes grow), so short native runs rise above
+# timer and scheduler noise.
+#
+# Usage: luajit_backend/bench/compare/run [--runs=N] [--mult=M] [FILTER]
+# Writes results/<host>.md beside this script and prints it.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../../.." && pwd)"
+roc="$root/zig-out/bin/roc"
+runs=10
+mult=1
+filter=""
+for a in "$@"; do
+	case "$a" in
+		--runs=*) runs="${a#--runs=}" ;;
+		--mult=*) mult="${a#--mult=}" ;;
+		*) filter="$a" ;;
+	esac
+done
+
+if [ -z "${COMPARE_IN_SHELL:-}" ]; then
+	exec nix shell --inputs-from "$root" nixpkgs#python3 nixpkgs#pypy3 nixpkgs#ruby nixpkgs#beamPackages.elixir \
+		nixpkgs#hyperfine nixpkgs#jq nixpkgs#luajit -c env COMPARE_IN_SHELL=1 "$0" "$@"
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/bench_compare.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+args_of() { local s="" i; for i in $(seq 1 "$1"); do s+=" x"; done; printf '%s' "$s"; }
+# Mean wall seconds from a hyperfine export.
+mean() { jq -r '.results[0].mean' "$1"; }
+
+host="$(hostname -s 2>/dev/null || cat /proc/sys/kernel/hostname)"
+out="$here/results/$host.md"
+mkdir -p "$here/results"
+{
+	echo "# Roc (native, LuaJIT) against other runtimes"
+	echo
+	echo "$(date '+%Y-%m-%d %H:%M %Z'), $host, $(uname -m), commit $(git -C "$root" rev-parse --short HEAD), $runs runs each, K = scale x $mult, load average $(cut -d' ' -f1-3 /proc/loadavg)."
+	echo "Runtimes: LuaJIT $(luajit -v | cut -d' ' -f2), CPython $(python3 -c 'import sys; print(sys.version.split()[0])'), PyPy $(pypy3 -c 'import sys; print(sys.pypy_version_info.major, sys.pypy_version_info.minor, sys.pypy_version_info.micro, sep=".")'), Ruby $(ruby -e 'print RUBY_VERSION') with YJIT, Elixir $(elixir --short-version 2>/dev/null) on OTP $(elixir -e 'IO.write(:erlang.system_info(:otp_release))')."
+	echo
+	echo "Each cell is the ratio to native Roc (lower is better): total time at K arguments / time per K of work with startup cancelled. Native's own times are in ms."
+	echo
+	echo "| benchmark | K | native ms | Roc LuaJIT | PyPy | Ruby YJIT | Elixir | CPython |"
+	echo "|---|---|---|---|---|---|---|---|"
+} > "$out"
+
+for src in startup fib dec_math dict_ops list_ops str_build; do
+	[ -n "$filter" ] && [[ "$src" != *"$filter"* ]] && continue
+	scale="$(sed -n 's/^# scale: //p' "$root/luajit_backend/bench/$src.roc")"
+	[ "$src" = startup ] || scale=$((scale * mult))
+	d="$work/$src"
+	mkdir -p "$d"
+	"$roc" build --opt=speed --no-cache "$root/luajit_backend/bench/$src.roc" --output="$d/native" >/dev/null 2>&1 || { echo "$src: native build failed" >&2; continue; }
+	"$roc" build --target=luajit --no-cache "$root/luajit_backend/bench/$src.roc" --output="$d/app.lua" >/dev/null 2>&1 || { echo "$src: LuaJIT build failed" >&2; continue; }
+	declare -A cmd=(
+		[native]="$d/native"
+		[luajit]="luajit $d/app.lua"
+		[pypy]="pypy3 $here/py/$src.py"
+		[ruby]="ruby --yjit $here/rb/$src.rb"
+		[elixir]="elixir $here/ex/$src.exs"
+		[cpython]="python3 $here/py/$src.py"
+	)
+	k="$(args_of "$scale")"
+	k4="$(args_of $((scale * 4)))"
+	want="$(${cmd[native]}$k 2>&1)"
+	declare -A total=() slope=()
+	for impl in native luajit pypy ruby elixir cpython; do
+		got="$(${cmd[$impl]}$k 2>&1)"
+		if [ "$got" != "$want" ]; then
+			echo "$src/$impl: printed '$got', native printed '$want'" >&2
+			total[$impl]=wrong
+			continue
+		fi
+		hyperfine -N --style=none --warmup 2 --runs "$runs" --export-json "$d/$impl.k.json" "${cmd[$impl]}$k" >/dev/null 2>&1
+		hyperfine -N --style=none --warmup 2 --runs "$runs" --export-json "$d/$impl.k4.json" "${cmd[$impl]}$k4" >/dev/null 2>&1
+		total[$impl]="$(mean "$d/$impl.k.json")"
+		slope[$impl]="$(awk -v a="$(mean "$d/$impl.k.json")" -v b="$(mean "$d/$impl.k4.json")" 'BEGIN { print (b - a) / 3 }')"
+	done
+	row="| $src | $scale | $(awk -v t="${total[native]}" 'BEGIN { printf "%.1f", t * 1000 }') |"
+	for impl in luajit pypy ruby elixir cpython; do
+		if [ "${total[$impl]}" = wrong ]; then
+			row+=" wrong output |"
+		elif [ "$src" = startup ]; then
+			row+=" $(awk -v t="${total[$impl]}" -v n="${total[native]}" 'BEGIN { printf "%.1fx", t / n }') |"
+		else
+			row+=" $(awk -v t="${total[$impl]}" -v n="${total[native]}" -v s="${slope[$impl]}" -v ns="${slope[native]}" 'BEGIN { printf "%.1fx / %.1fx", t / n, (ns > 0 ? s / ns : 0) }') |"
+		fi
+	done
+	echo "$row" >> "$out"
+	echo "$row" >&2
+	unset cmd total slope
+done
+echo >> "$out"
+echo "startup has no work term (it does none). A work ratio near 0 or negative means the run is too short for the noise; read the total instead." >> "$out"
+cat "$out"

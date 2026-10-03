@@ -1,0 +1,41 @@
+# These tests are auto-generated with test data from:
+# https://github.com/exercism/problem-specifications/tree/main/exercises/rna-transcription/canonical-data.json
+# File last updated on 2026-08-29
+
+import RnaTranscription exposing [to_rna]
+
+# Empty RNA sequence
+expect {
+	result = to_rna("")
+	result == ""
+}
+
+# RNA complement of cytosine is guanine
+expect {
+	result = to_rna("C")
+	result == "G"
+}
+
+# RNA complement of guanine is cytosine
+expect {
+	result = to_rna("G")
+	result == "C"
+}
+
+# RNA complement of thymine is adenine
+expect {
+	result = to_rna("T")
+	result == "A"
+}
+
+# RNA complement of adenine is uracil
+expect {
+	result = to_rna("A")
+	result == "U"
+}
+
+# RNA complement
+expect {
+	result = to_rna("ACGTGGTCTTAA")
+	result == "UGCACCAGAAUU"
+}

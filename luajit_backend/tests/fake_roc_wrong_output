@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Writes a LuaJIT "app" that prints the wrong thing, for demo_expect's negative control.
+for a in "$@"; do case "$a" in --output=*) out="${a#--output=}" ;; esac; done
+printf 'print("wrong output")\n' >"$out"

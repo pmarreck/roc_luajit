@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# performance-profile adapter command for luajit_backend/bench/<PROGRAM>.roc.
+memory SIZES SEED$|memory SIZES SEED
+# Builds the program for LuaJIT and natively (--opt=speed) with zig-out/bin/roc
+# into a cache keyed by the compiler binary and the source, then hands both to
+# driver.lua, which measures the LuaJIT build in-process against the native
+# build's output. Build output goes to stderr; stdout is the protocol only.
+set -u
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+here="$root/luajit_backend/bench/profile"
+program="${1:?usage: run PROGRAM time|steady|memory SIZES SEED}"
+kind="${2:?}" sizes="${3:?}" seed="${4:?}"
+src="$root/luajit_backend/bench/$program.roc"
+roc="$root/zig-out/bin/roc"
+[ -f "$src" ] || { echo "run: no benchmark $src" >&2; exit 2; }
+[ -x "$roc" ] || { echo "run: build roc first (zig build roc)" >&2; exit 2; }
+
+# The compiler is a multi-gigabyte debug build here; hashing it on every spawn
+# cost seconds, so the cache key takes its size, mtime and inode instead.
+key="$( { stat -L -c "%s %Y %i" "$roc"; cat "$src"; } | sha256sum | cut -c1-16)"
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/roc_luajit-profile/$program-$key"
+if [ ! -f "$cache/done" ]; then
+	mkdir -p "$cache"
+	"$roc" build --target=luajit --no-cache "$src" --output="$cache/app.lua" >"$cache/build.log" 2>&1 \
+		&& "$roc" build --opt=speed --no-cache "$src" --output="$cache/native" >>"$cache/build.log" 2>&1 \
+		|| { echo "run: building $program failed" >&2; cat "$cache/build.log" >&2; exit 1; }
+	: >"$cache/done"
+fi
+exec "${ROC_LUAJIT_PROFILE_LUAJIT:-luajit}" "$here/driver.lua" "$cache/app.lua" "$cache/native" "$kind" "$sizes" "$seed"

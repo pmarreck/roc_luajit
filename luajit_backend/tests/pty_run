@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# scripts/pty_run runs a command on a pseudo-terminal as upstream basic-cli's
+# test.py pty_process does: stdin, stdout and stderr are the terminal, the
+# input bytes are typed after a pause, everything the program writes comes
+# back on stdout (the terminal's combined output), and the exit status passes
+# through.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+run="$here/../scripts/pty_run"
+failures=0
+fail() { echo "pty_run: $1"; failures=$((failures + 1)); }
+input="$(mktemp "${TMPDIR:-/tmp}/pty_run.XXXXXX")"
+trap 'rm -f "$input"' EXIT
+
+# Terminal on all three streams; raw mode set by the program reads one byte.
+printf 'q' > "$input"
+out="$("$run" "$input" 5 sh -c '
+	[ -t 0 ] && [ -t 1 ] && [ -t 2 ] && echo "all three are a terminal"
+	echo "to stderr" >&2
+	stty raw -echo
+	c=$(dd bs=1 count=1 2>/dev/null)
+	stty sane
+	echo "read <$c>"
+	exit 3')"
+rc=$?
+out="$(tr -d '\r' <<< "$out")"
+[ "$rc" -eq 3 ] || fail "exit status $rc, expected 3"
+grep -q '^all three are a terminal$' <<< "$out" || fail "streams are not a terminal: $out"
+grep -q '^to stderr$' <<< "$out" || fail "stderr not in the combined output: $out"
+grep -q '^read <q>$' <<< "$out" || fail "typed input not read: $out"
+
+# Without raw mode the line discipline echoes typed input.
+printf 'hi\n' > "$input"
+out="$("$run" "$input" 5 sh -c 'read -r line; echo "got $line"' | tr -d '\r')"
+grep -q '^hi$' <<< "$out" || fail "typed line not echoed: $out"
+grep -q '^got hi$' <<< "$out" || fail "line not read: $out"
+
+# A program still running at the timeout is killed: status 124, as timeout(1).
+: > "$input"
+"$run" "$input" 1 sleep 30 >/dev/null
+rc=$?
+[ "$rc" -eq 124 ] || fail "timeout status $rc, expected 124"
+
+[ "$failures" -eq 0 ] && echo "pty_run: all passed"
+exit "$failures"

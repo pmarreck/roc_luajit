@@ -10,6 +10,10 @@ const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
+/// Experimental LuaJIT source emitter (roc_luajit; see ARCHITECTURE.md).
+pub const lua = @import("lua/LuaEmitter.zig");
+/// Runnable LuaJIT programs from emitted platform chunks and LuaJIT hosts.
+pub const lua_host = @import("lua/LuaHost.zig");
 
 // Re-export dev backend types at top level.
 pub const x86_64 = dev.x86_64;
@@ -56,6 +60,8 @@ test "backend tests" {
     std.testing.refAllDecls(dev);
     std.testing.refAllDecls(NativeProcCompiler);
     std.testing.refAllDecls(wasm);
+    std.testing.refAllDecls(lua);
+    std.testing.refAllDecls(lua_host);
 }
 
 test "native driver tests" {

@@ -27568,18 +27568,34 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.list_map_can_reuse.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(lowered),
             .interchangeable = interchangeable,
+            .map_output_elem = if (self.listMapElemLayouts(args)) |elems| elems.out else null,
             .next = next,
         } }, self.origin);
         continuation = try self.prependLoweredExprs(args, lowered, continuation);
         return continuation;
     }
 
+    const ListMapElems = struct { in: layout.Idx, out: layout.Idx };
+
     fn listMapLayoutsInterchangeable(
         self: *ProcBodyBuilder,
         args: []const checked.CheckedExprId,
     ) layout.WidthValues(bool) {
-        const none = layout.WidthValues(bool).both(false, false);
-        if (!self.parent.options.list_in_place_map) return none;
+        const elems = self.listMapElemLayouts(args) orelse return layout.WidthValues(bool).both(false, false);
+        return layout.WidthValues(bool).both(
+            self.listMapInterchangeableAtWidth(elems.in, elems.out, .u32),
+            self.listMapInterchangeableAtWidth(elems.in, elems.out, .u64),
+        );
+    }
+
+    /// Input and output element layouts of a `list_map_can_reuse`, or null
+    /// when in-place map is off, the input has no list allocation, or the
+    /// element representations rule reuse out.
+    fn listMapElemLayouts(
+        self: *ProcBodyBuilder,
+        args: []const checked.CheckedExprId,
+    ) ?ListMapElems {
+        if (!self.parent.options.list_in_place_map) return null;
         if (args.len != 2) boxyLowerInvariant("list_map_can_reuse reached boxy lowering with the wrong arity");
 
         const list_expr = self.module.checked_bodies.expr(args[0]);
@@ -27588,7 +27604,7 @@ const ProcBodyBuilder = struct {
         const in_elem_rep = self.repQuery().requiredSingleChild(list_rep, .list_elem).rep;
         const list_layout_idx = self.workerRuntimeLayoutForType(list_expr.ty).layoutIdx();
         const list_layout = self.parent.result.layouts.getLayout(list_layout_idx);
-        if (list_layout.tag != .list) return none;
+        if (list_layout.tag != .list) return null;
         const in_elem_idx = self.parent.result.layouts.runtimeRepresentationLayoutIdx(list_layout.getIdx());
 
         const transform_expr = self.module.checked_bodies.expr(args[1]);
@@ -27603,17 +27619,13 @@ const ProcBodyBuilder = struct {
         if ((!self.repIsFullyConcrete(in_elem_rep) or !self.repIsFullyConcrete(out_ret_rep)) and
             self.descriptorStorageRep(in_elem_rep) != self.descriptorStorageRep(out_ret_rep))
         {
-            return none;
+            return null;
         }
 
         const out_elem_idx = self.parent.result.layouts.runtimeRepresentationLayoutIdx(
             self.workerRuntimeLayoutForRep(out_ret_rep).layoutIdx(),
         );
-
-        return layout.WidthValues(bool).both(
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u64),
-        );
+        return .{ .in = in_elem_idx, .out = out_elem_idx };
     }
 
     fn listMapInterchangeableAtWidth(

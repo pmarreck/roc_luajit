@@ -1,0 +1,19 @@
+#!/usr/bin/expect
+
+# uncomment line below for debugging
+# exp_internal 1
+
+set timeout 7
+
+source ./ci_scripts/expect_scripts/shared-code.exp
+
+spawn ./examples/TryOperatorDesugaring/main
+
+expect -exact "Ok({ birth_year: 1990, name: \"Alice\" })\r\nOk({ birth_year: 1990, name: \"Alice\" })\r\n" {
+    expect eof {
+        check_exit_and_segfault
+    }
+}
+
+puts stderr "\nError: output was different from expected value."
+exit 1

@@ -1286,6 +1286,13 @@ pub const CFStmt = union(enum) {
         /// so the in-place branch is never taken there. Target-independent
         /// because both widths are stored; ignored by every other op.
         interchangeable: layout.WidthValues(bool) = layout.WidthValues(bool).both(true, true),
+        /// For `list_map_can_reuse`: the output element layout (the
+        /// transform's return layout), set by the lowering that computes
+        /// `interchangeable`. A backend whose element storage depends on
+        /// more than size and alignment (the LuaJIT backend stores an
+        /// element of k leaves in k slots) decides reuse from it. Null for
+        /// every other op.
+        map_output_elem: ?layout.Idx = null,
         /// Exact in-range byte alignment count proved by range analysis.
         /// Only `simd_concat_shift_bytes` uses this; null retains the dynamic
         /// operation. Backends consume this fact without inspecting definitions.

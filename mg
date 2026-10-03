@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# ./mg: memory gates: per-doubling GC allocation ratios and residual heap after repeated runs
+# (luajit_backend/bench/*.roc), checked by performance-profile against this
+# project's external history. Cases are in profiling.json; the adapter is
+# luajit_backend/bench/profile/run. Extra arguments go to performance-profile
+# (for example --case NAME or --seed TEXT).
+# Run inside the dev shell: nix develop -c ./mg
+# History goes to $PERFORMANCE_HISTORY_URL (default
+# file://$HOME/.local/state/performance-history).
+exec "$(dirname "${BASH_SOURCE[0]}")/luajit_backend/bench/profile/engine" run --mode mg "$@"

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# The Exercism Roc track as a conformance corpus: every exercise listed in
+# luajit_backend/demos/exercism/MANIFEST is copied to a work directory, its
+# test file of top-level `expect`s is turned into an app that prints each
+# expectation's result (scripts/expects_to_app.lua), and the apps go through
+# echo_conformance (native --opt=dev against LuaJIT; stdout, stderr and exit
+# status must agree). Every listed exercise must build natively.
+#
+# Usage: exercism_conformance [ROC] [max-unsupported=N] [EXERCISE...]
+# Exit status: echo_conformance's.
+set -u
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+demos="$root/luajit_backend/demos/exercism"
+max_unsupported=0
+pass=()
+selected=()
+for a in "$@"; do
+	case "$a" in
+		max-unsupported=*) max_unsupported="${a#max-unsupported=}" ;;
+		*/*) pass+=("$a") ;;
+		*) selected+=("$a") ;;
+	esac
+done
+if [ "${#selected[@]}" -eq 0 ]; then mapfile -t selected < <(grep -v '^#' "$demos/MANIFEST"); fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/exercism_conformance.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+files=()
+for ex in "${selected[@]}"; do
+	[ -d "$demos/$ex" ] || { echo "exercism_conformance: no exercise $ex" >&2; exit 2; }
+	cp -r "$demos/$ex" "$work/$ex"
+	app="$work/$ex/exercism_${ex//-/_}.roc"
+	luajit "$root/luajit_backend/scripts/expects_to_app.lua" "$work/$ex/$ex-test.roc" >"$app" || exit 2
+	files+=("$app")
+done
+
+"$here/echo_conformance" "${pass[@]}" "max-unsupported=$max_unsupported" max-skipped=0 "${files[@]}"

@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# End-to-end conformance for `roc build --target=luajit` on the echo corpus
+# (test/echo/*.roc, headerless apps on the default platform). Each app is built
+# natively (--opt=dev, the oracle) and for LuaJIT, both are run with no
+# arguments and empty stdin, and stdout bytes, stderr bytes and exit status are
+# compared. The native runtime appends a backtrace to a crash report; that
+# trailer has no LuaJIT counterpart and is not compared.
+#
+# Apps are checked in parallel (ROC_LUAJIT_JOBS processes, default: every
+# CPU); each writes its verdict to its own work directory, and the report is
+# assembled in file order.
+#
+# Usage: echo_conformance [ROC] [max-unsupported=N] [max-skipped=N] [FILE...]
+# Exit status: the number of diverging apps, plus 1 if the unsupported count
+# exceeds the ratchet, plus 1 if more apps than max-skipped fail to build
+# natively (for corpora known to build, such as the vendored demos).
+set -u
+
+# Strip the native runtime's backtrace: keep a crash report up to the blank
+# line that ends its message.
+strip_trailer() {
+	awk 'BEGIN { crash = 0; blank = 0 }
+		/^Roc application crashed with this message:/ { crash = 1 }
+		/^Roc application overflowed its stack memory$/ { crash = 1; blank = 1 }
+		{ if (crash && blank >= 2) exit; print; if (crash && $0 == "") blank++ }'
+}
+
+# `roc build` exits 2 when it built the output but reported warnings ("0
+# errors and N warnings"); that is a successful build.
+built() { # status out err
+	[ "$1" -eq 0 ] || { [ "$1" -eq 2 ] && grep -qh "^0 errors and" "$2" "$3"; }
+}
+
+# One app: `--one WORK ROC FILE` writes WORK/<name>/verdict (agreed,
+# diverged, unsupported or skipped) and WORK/<name>/report.
+if [ "${1:-}" = "--one" ]; then
+	work="$2" roc="$3" f="$4"
+	name="$(basename "$f" .roc)"
+	d="$work/$(printf %s "$f" | sha256sum | cut -c1-16)"
+	mkdir -p "$d"
+	(cd "$d" && timeout 300 "$roc" build --opt=dev --no-cache "$f" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err") 2>"$d/nb.shell"; nb=$?
+	if ! built "$nb" "$d/nb.out" "$d/nb.err"; then
+		echo skipped >"$d/verdict"
+		exit 0
+	fi
+	(cd "$d" && timeout 300 "$roc" build --target=luajit --no-cache "$f" --output="$d/app.lua" >"$d/lb.out" 2>"$d/lb.err") 2>"$d/lb.shell"; lb=$?
+	if ! built "$lb" "$d/lb.out" "$d/lb.err"; then
+		echo unsupported >"$d/verdict"
+		printf '  unsupported %s: %s\n' "$name" "$(grep -m1 -E 'Error|error' "$d/lb.err" | cut -c1-160)" >"$d/report"
+		exit 0
+	fi
+	args=()
+	if [ -f "${f%.roc}.args" ]; then read -r -a args <"${f%.roc}.args"; fi
+	(cd "$d" && timeout 60 ./native "${args[@]}" </dev/null >"$d/n.out" 2>"$d/n.err"); nrc=$?
+	(cd "$d" && timeout 60 luajit ./app.lua "${args[@]}" </dev/null >"$d/l.out" 2>"$d/l.err"); lrc=$?
+	strip_trailer <"$d/n.err" >"$d/n.err2"
+	if [ "$nrc" -eq "$lrc" ] && cmp -s "$d/n.out" "$d/l.out" && cmp -s "$d/n.err2" "$d/l.err"; then
+		echo agreed >"$d/verdict"
+	else
+		echo diverged >"$d/verdict"
+		{
+			printf '  DIVERGED %s: exit native=%d luajit=%d\n' "$name" "$nrc" "$lrc"
+			diff <(head -c 2000 "$d/n.out") <(head -c 2000 "$d/l.out") | head -6 | sed 's/^/    stdout /'
+			diff "$d/n.err2" "$d/l.err" | head -6 | sed 's/^/    stderr /'
+		} >"$d/report"
+	fi
+	exit 0
+fi
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+roc="$root/zig-out/bin/roc"
+max_unsupported=""
+max_skipped=""
+files=()
+for a in "$@"; do
+	case "$a" in
+		max-unsupported=*) max_unsupported="${a#max-unsupported=}" ;;
+		max-skipped=*) max_skipped="${a#max-skipped=}" ;;
+		*.roc) files+=("$(realpath "$a")") ;;
+		*) roc="$a" ;;
+	esac
+done
+if [ "${#files[@]}" -eq 0 ]; then
+	while IFS= read -r f; do files+=("$f"); done < <(find "$root/test/echo" "$here/apps" -maxdepth 1 -name '[a-z]*.roc' | sort)
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/echo_conformance.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+jobs="${ROC_LUAJIT_JOBS:-$(nproc)}"
+printf '%s\0' "${files[@]}" | xargs -0 -P "$jobs" -n 1 "${BASH_SOURCE[0]}" --one "$work" "$roc"
+
+agreed=0 diverged=0 unsupported=0 skipped=0
+for f in "${files[@]}"; do
+	d="$work/$(printf %s "$f" | sha256sum | cut -c1-16)"
+	case "$(cat "$d/verdict" 2>/dev/null)" in
+		agreed) agreed=$((agreed + 1)) ;;
+		diverged) diverged=$((diverged + 1)) ;;
+		unsupported) unsupported=$((unsupported + 1)) ;;
+		skipped) skipped=$((skipped + 1)) ;;
+		*) diverged=$((diverged + 1)); printf '  NO VERDICT %s\n' "$(basename "$f" .roc)" ;;
+	esac
+	if [ -f "$d/report" ]; then cat "$d/report"; fi
+done
+
+printf 'echo_conformance: %d agreed, %d diverged, %d unsupported, %d skipped (native build failed)\n' "$agreed" "$diverged" "$unsupported" "$skipped"
+status=$diverged
+if [ -n "$max_unsupported" ] && [ "$unsupported" -gt "$max_unsupported" ]; then
+	printf 'echo_conformance: unsupported %d exceeds the ratchet %d\n' "$unsupported" "$max_unsupported"
+	status=$((status + 1))
+fi
+if [ -n "$max_skipped" ] && [ "$skipped" -gt "$max_skipped" ]; then
+	printf 'echo_conformance: %d apps did not build natively (allowed %d)\n' "$skipped" "$max_skipped"
+	status=$((status + 1))
+fi
+exit "$status"

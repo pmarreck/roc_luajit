@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# Shape of the emitted Lua that decides whether LuaJIT can compile it.
+#
+# 1. Frame size. Procedures share Lua locals among LIR locals whose live
+#    ranges do not overlap, since LuaJIT traces abort past 250 stack slots
+#    across inlined frames ("trace too deep"). apps/long_chain.roc has 240
+#    dependent steps with at most two values live at once; no procedure may
+#    spill to a frame table or declare more than max_locals Lua locals.
+# 2. Layout. LuaJIT treats every backward `goto` as a loop, so segments are
+#    laid out in reverse postorder and only real loops jump backward.
+#    apps/merges.roc branches and merges without loops or recursion; none of
+#    its gotos may jump backward.
+# 3. Loops. A backward `goto` is a plain jump, which LuaJIT never counts as
+#    a loop, so loop headers sit in `while true do ... end`, whose LOOP
+#    bytecode it does count, and every segment of the loop is nested in that
+#    block, since a root trace that leaves the block's bytecode aborts.
+#    apps/tail_loop.roc runs a tail-recursive loop 1,000,000 times and
+#    apps/branchy_loop.roc one whose body branches and merges; LuaJIT must
+#    record a looping trace inside each, and no trace starting inside them
+#    may abort for leaving or meeting a loop.
+# 4. Aggregates. Records and tags live in Lua locals and cross calls as
+#    multiple values, because LuaJIT cannot sink a table carried around a
+#    loop or returned from a call. apps/iter_fold.roc folds over a range
+#    iterator (state records and Try tags every step); no trace inside its
+#    procedures may keep a table allocation (TNEW/TDUP not sunk).
+# 5. Startup. Parsing the prelude dominates a small program's startup, so
+#    the rarely used modules (sort, numparse, fmath, simd, crypto) are
+#    embedded as strings and compiled on first use. apps/merges.roc uses
+#    none of them and may compile none; apps/uses_sin.roc calls F64.sin and
+#    may compile only fmath.
+# 6. Code size. A flattened value crossing into a table is built by one
+#    helper per layout (and read back by another), so a site costs a call,
+#    not the whole variant chain: LuaJIT rejects a function whose jumps span
+#    more than 32,767 instructions ("control structure too long").
+#    apps/wide_tag_sites.roc stores a thirty-variant tag at sixteen sites;
+#    its variant chain (`== 28 and`) may appear once.
+# 7. Checked arithmetic. Checked integer add and sub inline their exact fast
+#    path and call the runtime only when the result leaves it
+#    (apps/checked_arith.roc).
+# 8. Integer conversions. A conversion between kinds of at most 64 bits
+#    that keeps every value is a plain move, and any other is a per-pair
+#    runtime function, never the generic rt.cvt_int (apps/int_conversions.roc).
+# 9. Hashing. Dict and Set thread a Hasher (a one-field record around a U64)
+#    through every hash write; it stays in its Lua local and is never built
+#    as a `{ seed }` table to be unpacked again (apps/dict_hashing.roc).
+# 10. Flat list storage. A list whose elements flatten to two or more leaves
+#    stores the leaves (rt.LF[k], list.lua's stride-k module), so list ops
+#    take and return leaves: no element operand of a flat list op is built
+#    into a table (R.m<layout>), and no element read comes back through one
+#    (rS from a list get). apps/record_lists.roc runs every list op on records, tuples and
+#    tags.
+# Output equality for these apps is checked by echo_conformance.
+#
+# Usage: emitted_layout [ROC]
+set -u
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+roc="${1:-$here/../../zig-out/bin/roc}"
+max_locals=16
+work="$(mktemp -d "${TMPDIR:-/tmp}/emitted_layout.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+status=0
+
+build() { # app.roc out.lua
+	if ! "$roc" build --target=luajit --no-cache "$here/apps/$1" --output="$2" >/dev/null 2>&1; then
+		echo "emitted_layout: building $1 failed"
+		status=1
+		return 1
+	fi
+}
+
+if build long_chain.roc "$work/chain.lua"; then
+	if grep -q "local S = {}" "$work/chain.lua"; then
+		echo "emitted_layout: long_chain spills locals to a frame table"
+		status=1
+	fi
+	# Declared locals: the `local rN, ...` lines opening each procedure body.
+	widest="$(awk '/^P\[[0-9]+\] = function/ { if (n > max) max = n; n = 0; inproc = 1; next }
+		inproc && /^\tlocal [a-z][0-9]/ { n += split(substr($0, 8), names, ","); next }
+		{ inproc = 0 } END { if (n > max) max = n; print max + 0 }' "$work/chain.lua")"
+	if [ "$widest" -gt "$max_locals" ]; then
+		echo "emitted_layout: long_chain declares $widest locals in one procedure (limit $max_locals)"
+		status=1
+	fi
+fi
+
+if build merges.roc "$work/merges.lua"; then
+	backward="$(awk '/^P\[[0-9]+\] = function/ { split("", seen) }
+		/^\t::s[0-9]+::$/ { label = $0; gsub(/[\t:]/, "", label); seen[label] = 1 }
+		/goto s[0-9]+/ { match($0, /goto s[0-9]+/); target = substr($0, RSTART + 5, RLENGTH - 5); if (target in seen) n++ }
+		END { print n + 0 }' "$work/merges.lua")"
+	if [ "$backward" -ne 0 ]; then
+		echo "emitted_layout: merges has $backward backward gotos without a loop"
+		status=1
+	fi
+fi
+for app in tail_loop branchy_loop; do
+	build "$app.roc" "$work/$app.lua" || continue
+	# Looping traces whose start line lies inside an emitted procedure.
+	luajit -jv="$work/$app.jv" "$work/$app.lua" a b c d e >/dev/null
+	first_proc="$(grep -n -m1 "^P\[[0-9]*\] = function" "$work/$app.lua" | cut -d: -f1)"
+	loops="$(grep -o "$app\.lua:[0-9]* loop\]" "$work/$app.jv" | awk -F"[: ]" -v first="$first_proc" '$2 >= first { n++ } END { print n + 0 }')"
+	if [ "$loops" -eq 0 ]; then
+		echo "emitted_layout: LuaJIT records no looping trace in $app's procedures"
+		status=1
+	fi
+	aborts="$(grep -E "TRACE --- .*$app\.lua:[0-9]+ -- (leaving loop|inner loop)" "$work/$app.jv" |
+		grep -o "$app\.lua:[0-9]* --" | awk -F"[: ]" -v first="$first_proc" '$2 >= first { n++ } END { print n + 0 }')"
+	if [ "$aborts" -ne 0 ]; then
+		echo "emitted_layout: $aborts traces in $app's procedures abort at a loop boundary"
+		status=1
+	fi
+done
+if build iter_fold.roc "$work/iter.lua"; then
+	luajit -jdump=is,"$work/iter.dump" "$work/iter.lua" a b c d e >/dev/null
+	first_proc="$(grep -n -m1 "^P\[[0-9]*\] = function" "$work/iter.lua" | cut -d: -f1)"
+	allocs="$(sed 's/\x1b\[[0-9;]*m//g' "$work/iter.dump" | awk -v first="$first_proc" '
+		/^---- TRACE [0-9]+ start/ { split($5, at, ":"); inproc = (at[2] + 0 >= first) }
+		/^---- TRACE [0-9]+ IR/ { inir = 1; next }
+		/^---- TRACE/ { inir = 0 }
+		inir && inproc && /(TNEW|TDUP)/ && $2 != "}" && $3 != "}" { n++ }
+		END { print n + 0 }')"
+	if [ "$allocs" -ne 0 ]; then
+		echo "emitted_layout: $allocs table allocations stay in iter_fold's traces"
+		status=1
+	fi
+fi
+
+# Names of the prelude chunks compiled while running an emitted program.
+compiled_modules() { # app.lua args...
+	luajit -e 'local load = loadstring
+		loadstring = function(s, name) io.stderr:write("compiled ", tostring(name), "\n") return load(s, name) end' "$@" 2>&1 >/dev/null |
+		sed -n 's/^compiled =//p' | sort | tr '\n' ' '
+}
+for case in "merges.roc:" "uses_sin.roc:fmath "; do
+	app="${case%%:*}" want="${case#*:}"
+	if build "$app" "$work/lazy.lua"; then
+		got="$(compiled_modules "$work/lazy.lua")"
+		if [ "$got" != "$want" ]; then
+			echo "emitted_layout: $app compiled prelude modules [${got}], expected [${want}]"
+			status=1
+		fi
+	fi
+done
+
+if build wide_tag_sites.roc "$work/wide.lua"; then
+	chains="$(grep -o '== 28 and' "$work/wide.lua" | wc -l)"
+	if [ "$chains" -ne 1 ]; then
+		echo "emitted_layout: wide_tag_sites emits the thirty-variant chain $chains times (expected once)"
+		status=1
+	fi
+fi
+
+# 7. Checked integer add and sub inline their exact fast path and call the
+#    runtime only from it: no statement assigns a runtime checked add/sub
+#    directly (apps/checked_arith.roc).
+if build checked_arith.roc "$work/checked.lua"; then
+	inline="$(grep -c 'do local ck = ' "$work/checked.lua")"
+	direct="$(grep -cE '^[[:space:]]*(r[0-9]+|S\[[0-9]+\]) = rt\.(add|sub)_checked_(i64|u64|i32|u32|i16|u16|i8|u8)\(' "$work/checked.lua")"
+	if [ "$inline" -eq 0 ] || [ "$direct" -ne 0 ]; then
+		echo "emitted_layout: checked_arith has $inline inline checked sites and $direct direct runtime calls (expected some, and none)"
+		status=1
+	fi
+fi
+# 8. No generic conversion call, and no call at all for a lossless pair.
+lossless() { # src dst: same kind, or a wider destination that holds every value
+	local s="$1" d="$2" sb="${1#?}" db="${2#?}"
+	[ "$s" = "$d" ] && return 0
+	case "$s$d" in
+		u*) [ "$db" -gt "$sb" ] ;;
+		i*i*) [ "$db" -ge "$sb" ] ;;
+		*) return 1 ;;
+	esac
+}
+if build int_conversions.roc "$work/conv.lua"; then
+	generic="$(grep -c 'rt\.cvt_int(' "$work/conv.lua")"
+	pairs="$(grep -oE 'rt\.cvt_[ui][0-9]+_[ui][0-9]+\(' "$work/conv.lua" | sort -u)"
+	if [ "$generic" -ne 0 ] || [ -z "$pairs" ]; then
+		echo "emitted_layout: int_conversions has $generic generic rt.cvt_int calls and per-pair calls: ${pairs:-none} (expected none, and some)"
+		status=1
+	fi
+	while IFS= read -r call; do
+		[ -n "$call" ] || continue
+		pair="${call#rt.cvt_}"
+		pair="${pair%\(}"
+		if lossless "${pair%_*}" "${pair#*_}"; then
+			echo "emitted_layout: int_conversions calls $call for a lossless conversion"
+			status=1
+		fi
+	done <<< "$pairs"
+fi
+# 9. No hasher result goes through a table.
+if build dict_hashing.roc "$work/hash.lua"; then
+	calls="$(grep -c 'rt\.hash_' "$work/hash.lua")"
+	wrapped="$(grep -c '{rt\.hash_' "$work/hash.lua")"
+	if [ "$calls" -eq 0 ] || [ "$wrapped" -ne 0 ]; then
+		echo "emitted_layout: dict_hashing has $calls hasher calls, $wrapped of them built into a table (expected some, and none)"
+		status=1
+	fi
+fi
+# 10. Flat list storage for multi-leaf elements.
+if build record_lists.roc "$work/records.lua"; then
+	flat="$(grep -c 'rt\.LF\[[0-9]*\]\.ll_' "$work/records.lua")"
+	built="$(grep -cE 'rt\.LF\[[0-9]+\]\.ll_(append_unsafe|prepend|set|replace|map_write_unsafe)\(.*R\.m[0-9]+\(' "$work/records.lua")"
+	unpacked="$(grep -cE 'rS = rt\.LF?(\[[0-9]+\])?\.ll_(get_unsafe|first|last)\(' "$work/records.lua")"
+	if [ "$flat" -eq 0 ] || [ "$built" -ne 0 ] || [ "$unpacked" -ne 0 ]; then
+		echo "emitted_layout: record_lists has $flat flat list ops, $built element tables built for a list op and $unpacked element tables read back (expected some, none and none)"
+		status=1
+	fi
+fi
+exit "$status"
