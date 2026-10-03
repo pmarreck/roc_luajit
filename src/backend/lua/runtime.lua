@@ -114,7 +114,7 @@ end
 function M.run_main(main)
 	local ok, result = xpcall(main, on_error)
 	if ok then
-		result = M.str_deep(result)
+		-- The root callee's R.h wrapper already made a Str result a Lua string.
 		if type(result) ~= "string" then
 			io.stderr:write("roc_luajit: main returned " .. type(result) .. ", expected Str\n")
 			os.exit(1)
@@ -402,8 +402,18 @@ for _, kind in ipairs({ "f64", "f32" }) do
 end
 
 -- Strings ------------------------------------------------------------------------
--- A Str is a Lua string (UTF-8 bytes) or a view: the first `n` bytes of an
--- append-only string.buffer `b`. Concatenation makes views, so repeated
+-- A Str is a Lua string (UTF-8 bytes), a view: the first `n` bytes of an
+-- append-only string.buffer `b`, an integer-valued Lua number (integer
+-- to_str: the value itself, formatted with %d when read), or a leaf
+-- `{ v, f }` holding an int64/uint64 cdata and its formatter. Numbers exist so
+-- that a number concatenated onto a string is formatted straight into the
+-- buffer and never becomes an interned Lua string; interning millions of
+-- short-lived number strings made LuaJIT's string table the dominant,
+-- super-linear cost of str_build (ARCHITECTURE.md). A plain number costs no
+-- allocation, so its cost does not depend on LuaJIT sinking a table. Views
+-- and leaves share STR_VIEW. Hosts never see a number or a table: the
+-- emitter converts every Str crossing to a host (R.h<layout>) with M.str.
+-- Concatenation makes views, so repeated
 -- appends cost the appended bytes only (native Roc appends in place to a
 -- unique string; Lua strings are immutable and `..` copies both sides).
 -- A view's bytes never change, because its buffer only grows: appending to
@@ -424,19 +434,40 @@ local STR_VIEW = {}
 local STR_VIEW_MIN_BYTES = 64
 
 local function str(s)
-	if type(s) == "string" then return s end
+	local t = type(s)
+	if t == "string" then return s end
+	if t == "number" then return (string.format("%d", s)) end
 	local cached = s.s
 	if cached then return cached end
-	cached = ffi.string(s.b:ref(), s.n)
+	if s.b then cached = ffi.string(s.b:ref(), s.n) else cached = s.f(s.v) end
 	s.s = cached
 	return cached
 end
 M.str = str
 
--- Views accepted.
+-- Exact powers of ten as doubles (10^0..10^22 are all representable).
+local POW10 = {}
+for k = 1, 22 do POW10[k] = 10 ^ k end
+-- Decimal length of an integer-valued Lua number as %d prints it, by exact
+-- power-of-ten comparisons: appending a number leaf adds this to the view's
+-- byte count instead of reading the buffer's length back after the write
+-- (ARCHITECTURE.md §10, number leaves).
+local function int_decimal_len(v)
+	local d = 1
+	if v < 0 then d, v = 2, -v end
+	local k = 1
+	while k <= 22 and v >= POW10[k] do k = k + 1 end
+	return d + k - 1
+end
+M.int_decimal_len = int_decimal_len
+
+-- Views and numbers accepted.
 function M.str_concat(a, b)
-	b = str(b)
+	if type(a) == "number" or (type(a) ~= "string" and a.b == nil) then a = str(a) end
+	local bv = type(b) == "number" and b or nil
+	if not bv then b = str(b) end
 	if type(a) == "string" then
+		if bv then b = str(b) end
 		local n = #a + #b
 		if n < STR_VIEW_MIN_BYTES then return a .. b end
 		local buf = strbuf.new(2 * n)
@@ -444,33 +475,30 @@ function M.str_concat(a, b)
 		return (setmetatable({ b = buf, n = n }, STR_VIEW))
 	end
 	local buf, n = a.b, a.n
+	local added = bv and int_decimal_len(bv) or #b
 	if #buf ~= n then
-		local copy = strbuf.new(2 * (n + #b))
+		local copy = strbuf.new(2 * (n + added))
 		copy:putcdata(buf:ref(), n)
 		buf = copy
 	end
-	buf:put(b)
-	return (setmetatable({ b = buf, n = n + #b }, STR_VIEW))
+	if bv then buf:putf("%d", bv) else buf:put(b) end
+	return (setmetatable({ b = buf, n = n + added }, STR_VIEW))
 end
 function M.str_is_eq(a, b) return str(a) == str(b) end
 function M.str_count_utf8_bytes(s)
-	if type(s) == "string" then return #s end
-	return s.n
+	local t = type(s)
+	if t == "string" then return #s end
+	if t == "number" then return (int_decimal_len(s)) end
+	if s.b then return s.n end
+	return #str(s)
 end
+
+-- An int64/uint64 cdata's to_str result: a leaf formatted on first use.
+local function int_leaf(v, f) return (setmetatable({ v = v, f = f }, STR_VIEW)) end
+M.int_leaf = int_leaf
 
 -- Replace every view inside a value with its string (hosts read Str fields
 -- as Lua strings); returns the value, itself materialized if a view.
-local function str_deep(v, seen)
-	if type(v) ~= "table" then return v end
-	if getmetatable(v) == STR_VIEW then return (str(v)) end
-	if seen[v] then return v end
-	seen[v] = true
-	for k, x in pairs(v) do
-		if type(x) == "table" then v[k] = str_deep(x, seen) end
-	end
-	return v
-end
-function M.str_deep(v) return (str_deep(v, {})) end
 function M.str_get_utf8_byte_unsafe(s, i) return byte(s, tonumber(i) + 1) end
 function M.str_substring_unsafe(s, start, len)
 	start = tonumber(start)
@@ -780,7 +808,7 @@ end
 -- error is a backend bug and exits 1 with a traceback.
 function M.call_entry(entry, ...)
 	local ok, result = xpcall(entry, on_error, ...)
-	if ok then return true, M.str_deep(result) end
+	if ok then return true, result end
 	if getmetatable(result) == crash_mt then return false, result.message end
 	if type(result) == "string" and result:match("stack overflow") then return false, nil, "stack_overflow" end
 	io.stdout:flush()
@@ -1213,7 +1241,7 @@ for name, t in pairs(small) do
 		if r < t.lo or r > t.hi then M.crash(message) end
 		return r
 	end
-	M[name .. "_to_str"] = function(v) return (string.format("%d", v)) end
+	M[name .. "_to_str"] = function(v) return v end
 end
 
 -- Division family, negation and absolute value -----------------------------------
@@ -1734,13 +1762,21 @@ end
 
 -- A number below 2^53 prints exactly with %d; tostring(int64 cdata) is
 -- decimal plus an "LL"/"ULL" suffix.
-function M.i64_to_str(v)
+local function format_i64(v)
 	if type(v) == "number" then return (string.format("%d", v)) end
 	return (string.gsub(tostring(v), "LL$", ""))
 end
-function M.u64_to_str(v)
+local function format_u64(v)
 	if type(v) == "number" then return (string.format("%d", v)) end
 	return (string.gsub(tostring(v), "ULL$", ""))
+end
+function M.i64_to_str(v)
+	if type(v) == "number" then return v end
+	return (int_leaf(v, format_i64))
+end
+function M.u64_to_str(v)
+	if type(v) == "number" then return v end
+	return (int_leaf(v, format_u64))
 end
 
 -- 128-bit integers and Dec (8-limb values; see int128.lua) ---------------------

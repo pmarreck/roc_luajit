@@ -81,6 +81,9 @@ annotate=[
 	luajit_backend/tests/tail_calls_cycle = Fixture test: scripts/tail_calls.lua decides mutually tail-calling functions together
 	luajit_backend/tests/toolchain.lua = Bootstrap LuaJIT 2.1/FFI/bit smoke used by the flake toolchain check
 	luajit_backend/tests/unsupported_ratchet = Max unsupported eval cases allowed by the differential run; lower as coverage grows
+	luajit_backend/upstream_reports/README.md = Candidate upstream reports (Roc panics, dev-backend segfault, Zig SEGV); local notes, not filed
+	luajit_backend/upstream_reports/reproduce = Rebuild every upstream-report candidate and print each failure
+	luajit_backend/upstream_reports/set_fold_speed_abi_crash.roc = Native --opt=speed aborts in x86_64 SysV classify on a Set fold over a list (repro)
 	mg = memory growth and cleanup gates (performance-profile --mode mg)
 	profiling.json = performance-profile cases: cg/mg/bm per bench program, startup
 	src/backend/lua/LuaEmitter.zig = Pure LIR-to-LuaJIT emitter; refuses unsupported constructs by name

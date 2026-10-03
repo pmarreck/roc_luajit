@@ -509,7 +509,8 @@ const Emitter = struct {
     /// memoized answer of `needsHostConversion`.
     host_to: std.AutoArrayHashMapUnmanaged(layout.Idx, void) = .empty,
     host_from: std.AutoArrayHashMapUnmanaged(layout.Idx, void) = .empty,
-    host_conversion: std.AutoHashMapUnmanaged(layout.Idx, bool) = .empty,
+    host_conversion_to: std.AutoHashMapUnmanaged(layout.Idx, bool) = .empty,
+    host_conversion_from: std.AutoHashMapUnmanaged(layout.Idx, bool) = .empty,
     /// Layouts whose materializer `R.m<layout>` (leaves -> table) or unpacker
     /// `R.u<layout>` (table -> leaves) the emitted code calls, each with a
     /// shape node of that layout; defined after the procedures.
@@ -568,7 +569,8 @@ const Emitter = struct {
         self.leaf_rc_helpers.deinit(self.gpa);
         self.host_to.deinit(self.gpa);
         self.host_from.deinit(self.gpa);
-        self.host_conversion.deinit(self.gpa);
+        self.host_conversion_to.deinit(self.gpa);
+        self.host_conversion_from.deinit(self.gpa);
         self.materializers.deinit(self.gpa);
         self.unpackers.deinit(self.gpa);
         self.shared.deinit(self.gpa);
@@ -677,13 +679,13 @@ const Emitter = struct {
     fn emitRootCallee(self: *Emitter, out: *std.Io.Writer, proc_id: LIR.LirProcSpecId) EmitError!void {
         const spec = self.store().getProcSpec(proc_id);
         const params = self.store().getLocalSpan(spec.args);
-        var convert = try self.needsHostConversion(spec.ret_layout);
-        for (0..params.len) |i| convert = convert or try self.needsHostConversion(self.layoutOfLocal(GuardedList.at(params, i)));
+        var convert = try self.needsHostConversion(spec.ret_layout, true);
+        for (0..params.len) |i| convert = convert or try self.needsHostConversion(self.layoutOfLocal(GuardedList.at(params, i)), false);
         if (!convert) return out.print("P[{d}]", .{@intFromEnum(proc_id)});
         try out.writeAll("function(");
         for (0..params.len) |i| try out.print("{s}a{d}", .{ if (i == 0) "" else ", ", i + 1 });
         try out.writeAll(") return ");
-        const ret_conv = try self.needsHostConversion(spec.ret_layout);
+        const ret_conv = try self.needsHostConversion(spec.ret_layout, true);
         if (ret_conv) {
             try self.host_to.put(self.gpa, spec.ret_layout, {});
             try out.print("R.h{d}(", .{@intFromEnum(spec.ret_layout)});
@@ -692,7 +694,7 @@ const Emitter = struct {
         for (0..params.len) |i| {
             if (i != 0) try out.writeAll(", ");
             const p = self.layoutOfLocal(GuardedList.at(params, i));
-            if (try self.needsHostConversion(p)) {
+            if (try self.needsHostConversion(p, false)) {
                 try self.host_from.put(self.gpa, p, {});
                 try out.print("R.g{d}(a{d})", .{ @intFromEnum(p), i + 1 });
             } else try out.print("a{d}", .{i + 1});
@@ -856,20 +858,20 @@ const Emitter = struct {
             // Hosts read and build lists with one value per element, so
             // arguments and results holding flat lists are converted here.
             const params = self.store().getLocalSpan(proc.args);
-            var convert = try self.needsHostConversion(proc.ret_layout);
-            for (0..params.len) |i| convert = convert or try self.needsHostConversion(self.layoutOfLocal(GuardedList.at(params, i)));
+            var convert = try self.needsHostConversion(proc.ret_layout, false);
+            for (0..params.len) |i| convert = convert or try self.needsHostConversion(self.layoutOfLocal(GuardedList.at(params, i)), true);
             try self.w().print("P[{d}] = ", .{@intFromEnum(proc_id)});
             if (convert) {
                 try self.w().writeAll("(function(f) return function(");
                 for (0..params.len) |i| try self.w().print("{s}a{d}", .{ if (i == 0) "" else ", ", i + 1 });
                 try self.w().writeAll(") return ");
-                const ret_conv = try self.needsHostConversion(proc.ret_layout);
+                const ret_conv = try self.needsHostConversion(proc.ret_layout, false);
                 if (ret_conv) try self.w().print("R.g{d}(", .{@intFromEnum(proc.ret_layout)});
                 try self.w().writeAll("f(");
                 for (0..params.len) |i| {
                     if (i != 0) try self.w().writeAll(", ");
                     const p = self.layoutOfLocal(GuardedList.at(params, i));
-                    if (try self.needsHostConversion(p)) {
+                    if (try self.needsHostConversion(p, true)) {
                         try self.host_to.put(self.gpa, p, {});
                         try self.w().print("R.h{d}(a{d})", .{ @intFromEnum(p), i + 1 });
                     } else try self.w().print("a{d}", .{i + 1});
@@ -1790,47 +1792,6 @@ const Emitter = struct {
         try self.w().writeAll(")");
     }
 
-    /// An argument to a hosted procedure: hosts read Str values, at any
-    /// depth, as Lua strings.
-    fn emitHostedArg(self: *Emitter, local: LIR.LocalId) EmitError!void {
-        const idx = self.layoutOfLocal(local);
-        if (reprOf(idx) == .str) return self.emitStrOperand(local);
-        var visiting: std.AutoHashMapUnmanaged(layout.Idx, void) = .empty;
-        defer visiting.deinit(self.gpa);
-        if (!try self.layoutHasStr(idx, &visiting)) return self.emitSlot(local);
-        try self.w().writeAll("rt.str_deep(");
-        try self.emitSlot(local);
-        try self.w().writeAll(")");
-    }
-
-    /// Whether values of this layout can hold a Str (directly, in fields,
-    /// tag payloads, list elements or boxes).
-    fn layoutHasStr(self: *Emitter, idx: layout.Idx, visiting: *std.AutoHashMapUnmanaged(layout.Idx, void)) EmitError!bool {
-        if (reprOf(idx) == .str) return true;
-        if ((try visiting.getOrPut(self.gpa, idx)).found_existing) return false;
-        const lay = self.layouts().getLayout(idx);
-        switch (lay.tag) {
-            .scalar, .zst, .box_of_zst, .list_of_zst, .ptr => return false,
-            .box, .list => return self.layoutHasStr(lay.getIdx(), visiting),
-            .struct_ => {
-                const fields = self.layouts().getStructInfo(lay).fields;
-                for (0..fields.len) |i| {
-                    if (try self.layoutHasStr(fields.get(i).layout, visiting)) return true;
-                }
-                return false;
-            },
-            .tag_union => {
-                const variants = self.layouts().getTagUnionVariants(self.layouts().getTagUnionData(lay.getTagUnion().idx));
-                for (0..variants.len) |i| {
-                    if (try self.layoutHasStr(variants.get(i).payload_layout, visiting)) return true;
-                }
-                return false;
-            },
-            // Captures are opaque to the host, which calls them, never reads them.
-            .closure, .erased_callable, .erased_box => return false,
-        }
-    }
-
     fn reprOfLocal(self: *Emitter, local: LIR.LocalId) Repr {
         return reprOf(self.store().getLocal(local).layout_idx);
     }
@@ -1894,15 +1855,9 @@ const Emitter = struct {
                     }
                     try self.beginAssign(s.target, depth);
                     try self.w().print("P[{d}](", .{@intFromEnum(s.proc)});
-                    if (self.store().getProcSpec(s.proc).hosted != null) {
-                        const call_args = self.store().getLocalSpan(s.args);
-                        for (0..call_args.len) |i| {
-                            if (i != 0) try self.w().writeAll(", ");
-                            try self.emitHostedArg(GuardedList.at(call_args, i));
-                        }
-                    } else {
-                        try self.emitArgs(s.args);
-                    }
+                    // A hosted procedure's P[n] wrapper converts its
+                    // arguments for the host (R.h<layout>), Strs included.
+                    try self.emitArgs(s.args);
                     try self.w().writeAll(")\n");
                     current = s.next;
                 },
@@ -2385,32 +2340,36 @@ const Emitter = struct {
 
     /// Whether values of this layout hold a flat-stored list at any depth,
     /// so they need converting where hosts read or build them.
-    fn needsHostConversion(self: *Emitter, idx: layout.Idx) EmitError!bool {
-        if (self.host_conversion.get(idx)) |known| return known;
+    fn needsHostConversion(self: *Emitter, idx: layout.Idx, to_host: bool) EmitError!bool {
+        const memo = if (to_host) &self.host_conversion_to else &self.host_conversion_from;
+        if (memo.get(idx)) |known| return known;
+        // A Str crossing to a host is materialized (a view or a number Str is
+        // not a Lua string); a host-built Str is already a Lua string.
+        if (reprOf(idx) == .str) return to_host;
         // Recursive layouts reach themselves through lists and boxes; a
         // cycle adds nothing, so it counts as false until decided.
-        try self.host_conversion.put(self.gpa, idx, false);
+        try memo.put(self.gpa, idx, false);
         const lay = self.layouts().getLayout(idx);
         const result = switch (lay.tag) {
             .scalar, .zst, .box_of_zst, .list_of_zst, .ptr, .closure, .erased_callable, .erased_box => false,
-            .list => try self.elemStride(lay.getIdx()) > 1 or try self.needsHostConversion(lay.getIdx()),
-            .box => try self.needsHostConversion(lay.getIdx()),
+            .list => try self.elemStride(lay.getIdx()) > 1 or try self.needsHostConversion(lay.getIdx(), to_host),
+            .box => try self.needsHostConversion(lay.getIdx(), to_host),
             .struct_ => blk: {
                 const fields = self.layouts().getStructInfo(lay).fields;
                 for (0..fields.len) |i| {
-                    if (try self.needsHostConversion(fields.get(i).layout)) break :blk true;
+                    if (try self.needsHostConversion(fields.get(i).layout, to_host)) break :blk true;
                 }
                 break :blk false;
             },
             .tag_union => blk: {
                 const variants = self.layouts().getTagUnionVariants(self.layouts().getTagUnionData(lay.getTagUnion().idx));
                 for (0..variants.len) |i| {
-                    if (try self.needsHostConversion(variants.get(i).payload_layout)) break :blk true;
+                    if (try self.needsHostConversion(variants.get(i).payload_layout, to_host)) break :blk true;
                 }
                 break :blk false;
             },
         };
-        try self.host_conversion.put(self.gpa, idx, result);
+        try memo.put(self.gpa, idx, result);
         return result;
     }
 
@@ -2435,6 +2394,7 @@ const Emitter = struct {
     /// One converter body; `to_host` selects `R.h` over `R.g`.
     fn emitHostConverter(self: *Emitter, idx: layout.Idx, to_host: bool) EmitError!void {
         const letter: u8 = if (to_host) 'h' else 'g';
+        if (reprOf(idx) == .str) return self.w().print("R.{c}{d} = rt.str\n", .{ letter, @intFromEnum(idx) });
         try self.w().print("R.{c}{d} = function(v)\n", .{ letter, @intFromEnum(idx) });
         const lay = self.layouts().getLayout(idx);
         switch (lay.tag) {
@@ -2448,7 +2408,7 @@ const Emitter = struct {
                 } else {
                     try self.w().writeAll("\treturn rt.list_map_values(v, ");
                 }
-                if (try self.needsHostConversion(elem)) {
+                if (try self.needsHostConversion(elem, to_host)) {
                     try self.emitHostConverterRef(elem, to_host);
                 } else try self.w().writeAll("nil");
                 try self.w().writeAll(")\n");
@@ -2465,7 +2425,7 @@ const Emitter = struct {
                 for (0..count) |f| {
                     if (f != 0) try self.w().writeAll(", ");
                     const field = self.layouts().getStructFieldLayoutByOriginalIndex(sidx, @intCast(f));
-                    if (try self.needsHostConversion(field)) {
+                    if (try self.needsHostConversion(field, to_host)) {
                         try self.emitHostConverterRef(field, to_host);
                         try self.w().print("(v[{d}])", .{f + 1});
                     } else try self.w().print("v[{d}]", .{f + 1});
@@ -2476,7 +2436,7 @@ const Emitter = struct {
                 const variants = self.layouts().getTagUnionVariants(self.layouts().getTagUnionData(lay.getTagUnion().idx));
                 for (0..variants.len) |v| {
                     const payload = variants.get(v).payload_layout;
-                    if (!try self.needsHostConversion(payload)) continue;
+                    if (!try self.needsHostConversion(payload, to_host)) continue;
                     try self.w().print("\tif v[1] == {d} then return {{v[1], ", .{v});
                     try self.emitHostConverterRef(payload, to_host);
                     try self.w().writeAll("(v[2])} end\n");
@@ -3446,6 +3406,11 @@ const Emitter = struct {
         try self.w().writeAll(" = ");
         self.hasher_into_leaf = true;
         defer self.hasher_into_leaf = false;
+        // Hasher ops read Str bytes, so a Str operand is materialized here as
+        // in emitLowLevel (a Str view or number leaf is not a Lua string).
+        const saved = self.str_operands;
+        self.str_operands = true;
+        defer self.str_operands = saved;
         try self.emitHasher(s.op, s.args, s.target);
         try self.w().writeAll("\n");
         return true;

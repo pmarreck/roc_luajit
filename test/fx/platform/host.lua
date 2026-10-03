@@ -174,7 +174,7 @@ function M.run(app, argv)
 	hosted.roc_builder_print_value = function(builder)
 		hosted.roc_stdout_line("SUCCESS: Builder.print_value! called via static dispatch!")
 		hosted.roc_stdout_line("  value: " .. builder[2])
-		hosted.roc_stdout_line("  count: " .. rt.u64_to_str(builder[1]))
+		hosted.roc_stdout_line("  count: " .. rt.str(rt.u64_to_str(builder[1])))
 		return rt.ZST
 	end
 	hosted.roc_host_get_greeting = function(host) return "Hello, " .. host[1] .. "!" end

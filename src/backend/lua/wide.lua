@@ -2,7 +2,7 @@
 -- A value is a Lua array of 16-bit limbs, least significant first, all plain
 -- Lua numbers. Every limb product (< 2^32) and every column sum stays far
 -- below 2^53, so all arithmetic is exact without FFI. Correctness first;
--- representation and speed are revisited after conformance (the owner, 2026-09-30).
+-- representation and speed are revisited after conformance (decided 2026-09-30 by BDFN, the Benevolent Dictator For Now).
 local W = {}
 
 local BASE = 65536

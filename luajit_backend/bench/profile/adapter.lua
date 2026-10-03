@@ -65,7 +65,10 @@ end
 -- Measure `opts.app` (an APP factory) at each of `opts.sizes` argument counts.
 -- opts: oracle(n) -> expected stdout, kind "time" | "steady" | "memory", warmups,
 -- samples, clock = { cpu, wall } (nanoseconds), gc = { count_bytes, collect,
--- stop, restart }, ready() called once the program is instantiated.
+-- stop, restart }, jit = { set_sink(on) } (the memory kind turns allocation
+-- sinking off before any run, so allocation counts do not depend on which
+-- tables a process happens to sink), ready() called once the program is
+-- instantiated.
 -- complexity: O(sum(sizes) * (warmups + samples)) runs of the program.
 function M.measure(opts)
 	local out = {}
@@ -81,14 +84,25 @@ function M.measure(opts)
 			return program.rt.ZST
 		end
 	end)(hosted.roc_default_echo_line)
+	if opts.kind == "memory" then opts.jit.set_sink(false) end
 	if opts.ready then opts.ready() end
 	local rows = {}
-	for _, n in ipairs(opts.sizes) do
+	local function warm(n)
 		local expected = opts.oracle(n)
 		for _ = 1, opts.warmups do
 			run_once(program, out, n)
 			verify(out, expected, n)
 		end
+	end
+	-- Memory: every size is warmed before any residual base is taken, so
+	-- traces the JIT still records for a later size are not read as retained
+	-- memory of an earlier one. Timing kinds warm each size just before it.
+	if opts.kind == "memory" then
+		for _, n in ipairs(opts.sizes) do warm(n) end
+	end
+	for _, n in ipairs(opts.sizes) do
+		local expected = opts.oracle(n)
+		if opts.kind ~= "memory" then warm(n) end
 		local row = { size = n, samples = {} }
 		if opts.kind == "memory" then
 			local gc = opts.gc
@@ -130,7 +144,7 @@ function M.measure(opts)
 		end
 		rows[#rows + 1] = row
 	end
-	local result = { schema = "performance-measurement/v1", correct = true, rows = rows, heap_settled = opts.kind ~= "steady" }
+	local result = { schema = "performance-measurement/v1", correct = true, rows = rows, heap_settled = opts.kind ~= "steady", jit_sink = opts.kind ~= "memory" }
 	if opts.kind == "memory" then
 		result.allocator_coverage = "LuaJIT GC heap via collectgarbage('count'), collector stopped during each run; "
 			.. "excludes JIT machine code and memory outside the GC (none is allocated by the runtime)"

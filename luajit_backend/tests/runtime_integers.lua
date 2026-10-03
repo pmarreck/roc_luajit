@@ -90,9 +90,9 @@ for _, case in ipairs(cases64) do
 	if want == nil then check(label, crashed, "overflow!") else check(label, v, want) end
 end
 
-check("i64_to_str min", rt.i64_to_str(I64_MIN), "-9223372036854775808")
-check("u64_to_str max", rt.u64_to_str(U64_MAX), "18446744073709551615")
-check("i8_to_str", rt.i8_to_str(-128), "-128")
+check("i64_to_str min", rt.str(rt.i64_to_str(I64_MIN)), "-9223372036854775808")
+check("u64_to_str max", rt.str(rt.u64_to_str(U64_MAX)), "18446744073709551615")
+check("i8_to_str", rt.str(rt.i8_to_str(-128)), "-128")
 
 -- Wide-integer crashes must be the runtime's crash value, so run_main reports
 -- them as Roc crashes (exit 3) rather than Lua errors (exit 1).

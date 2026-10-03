@@ -44,14 +44,15 @@ local function show64(ctype, show)
 	end
 end
 local reprs = {
-	i64 = { parse = function(s) return parse64(s, "int64_t") end, show = show64("int64_t", rt.i64_to_str) },
-	u64 = { parse = function(s) return parse64(s, "uint64_t") end, show = show64("uint64_t", rt.u64_to_str) },
+	i64 = { parse = function(s) return parse64(s, "int64_t") end, show = show64("int64_t", function(x) return rt.str(rt.i64_to_str(x)) end) },
+	u64 = { parse = function(s) return parse64(s, "uint64_t") end, show = show64("uint64_t", function(x) return rt.str(rt.u64_to_str(x)) end) },
 	i128 = { parse = parse_signed_wide, show = I.i128_to_str },
 	u128 = { parse = function(s) return W.from_decimal(s, 8) end, show = I.u128_to_str },
 	dec = { parse = parse_signed_wide, show = I.i128_to_str }, -- raw scaled bits
 }
 for _, t in ipairs({ "u8", "i8", "u16", "i16", "u32", "i32" }) do
-	reprs[t] = { parse = tonumber, show = rt[t .. "_to_str"] }
+	local to_str = rt[t .. "_to_str"]
+	reprs[t] = { parse = tonumber, show = function(x) return rt.str(to_str(x)) end }
 end
 -- Floats travel as bit patterns (NaN normalized by to_bits).
 reprs.f64 = {

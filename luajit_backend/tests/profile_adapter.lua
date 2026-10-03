@@ -66,6 +66,7 @@ local function opts(behavior, kind, gc)
 		warmups = 3, samples = 5,
 		clock = { cpu = stepping(1e6), wall = stepping(2e6) },
 		gc = gc or { count_bytes = function() return 0 end, collect = function() end, stop = function() end, restart = function() end },
+		jit = { set_sink = function() end },
 	}
 end
 
@@ -187,6 +188,67 @@ do
 	for _, e in ipairs(events) do if e == "collect" then collects = collects + 1 end end
 	check("steady kind never collects", collects, 0)
 	check("steady kind has timing rows", #ms.rows[1].samples.cpu_ns, 5)
+end
+
+-- Memory kind turns allocation sinking off before the first run (warmups
+-- included) and records it: whether LuaJIT sinks a short-lived table varies
+-- by process and can switch mid-sweep (str_build: 11.6 MB sunk, 22.9 MB not,
+-- a switch read 3.04/2.31/2.14), so allocation counts are measured as the
+-- program's own allocations. Timing kinds keep sinking on.
+do
+	local calls = {}
+	local o = opts(nil, "memory", fake_gc(0))
+	o.jit = { set_sink = function(on) calls[#calls + 1] = on end }
+	local app = o.app
+	local ran_before_set
+	o.app = function(hosted)
+		local p = app(hosted)
+		local entry = p.entrypoints.roc_default_start_main
+		p.entrypoints.roc_default_start_main = function(list)
+			if #calls == 0 then ran_before_set = true end
+			return entry(list)
+		end
+		return p
+	end
+	local mm = A.measure(o)
+	check("memory kind turns sinking off once", #calls == 1 and calls[1], false)
+	check("no run before sinking is off", ran_before_set, nil)
+	check("memory kind records sinking off", mm.jit_sink, false)
+	calls = {}
+	local ot = opts(nil, "time")
+	ot.jit = { set_sink = function(on) calls[#calls + 1] = on end }
+	local mt = A.measure(ot)
+	check("time kind leaves sinking alone", #calls, 0)
+	check("time kind records sinking on", mt.jit_sink, true)
+end
+
+-- Memory kind warms every size before the first sampled cycle of any size:
+-- with sinking off, dict_ops' traces kept appearing during the first size's
+-- cycles (residual 31.9, 67.4, 74.5, 74.6 KB, then flat; later sizes 1-4 KB),
+-- which reads as a leak. A real leak still accumulates per cycle.
+do
+	local events = {}
+	local g = fake_gc(0)
+	local stop = g.stop
+	g.stop = function() events[#events + 1] = "sample" stop() end
+	local o = opts(nil, "memory", g)
+	local app = o.app
+	o.app = function(hosted)
+		local p = app(hosted)
+		local entry = p.entrypoints.roc_default_start_main
+		p.entrypoints.roc_default_start_main = function(list) events[#events + 1] = #list return entry(list) end
+		return p
+	end
+	A.measure(o)
+	local first_sample
+	for i, e in ipairs(events) do if e == "sample" then first_sample = i break end end
+	local warmed = {}
+	for i = 1, first_sample - 1 do warmed[events[i]] = (warmed[events[i]] or 0) + 1 end
+	check("size 4 warmed before any sample", warmed[4], 3)
+	check("size 8 warmed before any sample", warmed[8], 3)
+	local runs = 0
+	for _, e in ipairs(events) do if e ~= "sample" then runs = runs + 1 end end
+	check("each size warmed once, not twice", runs, 2 * (3 + 5))
 end
 
 if failures == 0 then

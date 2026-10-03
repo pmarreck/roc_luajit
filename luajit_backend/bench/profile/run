@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # performance-profile adapter command for luajit_backend/bench/<PROGRAM>.roc.
-memory SIZES SEED$|memory SIZES SEED
+# Usage: run PROGRAM time|steady|memory SIZES SEED
 # Builds the program for LuaJIT and natively (--opt=speed) with zig-out/bin/roc
 # into a cache keyed by the compiler binary and the source, then hands both to
 # driver.lua, which measures the LuaJIT build in-process against the native

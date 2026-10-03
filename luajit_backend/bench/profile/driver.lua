@@ -64,6 +64,12 @@ local ok, result = pcall(A.measure, {
 		stop = function() collectgarbage("stop") end,
 		restart = function() collectgarbage("restart") end,
 	},
+	jit = {
+		set_sink = function(on)
+			jit.flush()
+			jit.opt.start(on and "+sink" or "-sink")
+		end,
+	},
 	ready = function()
 		io.stdout:write("performance-ready/v1\n")
 		io.stdout:flush()
