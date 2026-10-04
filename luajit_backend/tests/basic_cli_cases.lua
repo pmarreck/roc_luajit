@@ -20,17 +20,34 @@
 -- path, and temp_cwd cases a fresh empty directory at the same path, so
 -- paths printed by the two runs agree.
 --
--- Usage: luajit basic_cli_cases.lua WORK CORPUS [max-unsupported=N] [FILTER]
--- WORK/build/<app name>/{native,app.lua,built} come from basic_cli_conformance.
+-- Usage: luajit basic_cli_cases.lua WORK CORPUS [candidate=luajit|wasm] [max-unsupported=N] [FILTER]
+-- WORK/build/<app name>/{native,app.lua or app.wasm,built} come from
+-- basic_cli_conformance. The candidate is the LuaJIT build (default) or the
+-- wasm32 build on the WASI platform, run by wasmtime with the host's root
+-- directory and environment.
 -- Exit status: diverging cases, plus 1 if the unsupported count exceeds the
 -- ratchet.
 local cjson = require("cjson")
 
 local work, corpus = assert(arg[1], "work dir"), assert(arg[2], "corpus dir")
 local max_unsupported, filter
+local candidate = "luajit"
 for i = 3, #arg do
 	local n = arg[i]:match("^max%-unsupported=(%d+)$")
-	if n then max_unsupported = tonumber(n) else filter = arg[i] end
+	local c = arg[i]:match("^candidate=(%a+)$")
+	if n then max_unsupported = tonumber(n) elseif c then candidate = c else filter = arg[i] end
+end
+assert(candidate == "luajit" or candidate == "wasm", "candidate must be luajit or wasm")
+local CANDIDATE = candidate == "wasm" and "wasm" or "LuaJIT"
+-- The command running a built candidate, and the name of a hosted function
+-- it reports missing (the LuaJIT host's loader, or wasmtime's unknown import).
+local function candidate_command(build)
+	-- argv[0] is the module's full path, as a native program sees its own.
+	if candidate == "wasm" then return ("wasmtime run -S inherit-env=y --dir=/ --argv0 '%s' '%s'"):format(build .. "/app.wasm", build .. "/app.wasm") end
+	return "luajit " .. ("'%s'"):format(build .. "/app.lua")
+end
+local function missing_hosted(err)
+	return err:match("does not provide hosted function ([%w_]+)")
 end
 
 -- Cases whose output legitimately differs between two runs of one binary.
@@ -40,6 +57,14 @@ local spec_only = {
 	["examples/temp-dir.roc"] = "prints a fresh temporary directory",
 	["examples/command-line-args.roc"] = "prints the program's own path",
 	["examples/file-accessed-modified-created-time.roc"] = "prints the birth time of a fresh copy",
+}
+
+-- Cases the WASI host cannot run as native does, because WASI preview1 lacks
+-- what they need. They count as unsupported, with the reason.
+local wasi_limits = {
+	["examples/file-permissions.roc"] = "WASI exposes no permission bits (File.is_executable!)",
+	["examples/check-command.roc"] = "WASI exposes no permission bits (it looks for executables on PATH)",
+	["apps/path_copy_mode.roc"] = "WASI exposes no permission bits (Path.is_executable!)",
 }
 
 local function sh_quote(s) return "'" .. s:gsub("'", "'\\''") .. "'" end
@@ -150,15 +175,18 @@ for _, app in ipairs(spec.apps) do
 		for _, case in ipairs(app.cases or {}) do
 			local base = work .. "/cases/" .. name .. "/" .. case.name
 			assert(run("mkdir -p " .. sh_quote(base)))
-			if built ~= "both" and built ~= "native-only" then
+			if candidate == "wasm" and wasi_limits[app.path] and built == "both" then
+				report("unsupported", app, case, wasi_limits[app.path])
+			elseif built ~= "both" and built ~= "native-only" then
 				report("skipped", app, case, "native build failed")
 			elseif built == "native-only" then
-				report("unsupported", app, case, "LuaJIT build failed: " .. ((read(build .. "/lb.err") or ""):match("[^\n]*[Ee]rror[^\n]*") or "?"):sub(1, 160))
+				report("unsupported", app, case, CANDIDATE .. " build failed: " .. ((read(build .. "/lb.err") or ""):match("[^\n]*[Ee]rror[^\n]*") or "?"):sub(1, 160))
 			else
 				local native = run_case(app, case, base, sh_quote(build .. "/native"))
 				local native_failures = check_spec(case, native)
-				local lua = run_case(app, case, base, "luajit " .. sh_quote(build .. "/app.lua"))
-				local missing = lua.err:match("does not provide hosted function ([%w_]+)")
+				local lua = run_case(app, case, base, candidate_command(build))
+				-- A pty case's stderr reaches the terminal, which is its stdout.
+				local missing = missing_hosted(lua.err) or (case.pty and missing_hosted(lua.out))
 				if missing then
 					unsupported_names[missing] = true
 					report("unsupported", app, case, "no hosted function " .. missing)
@@ -166,16 +194,16 @@ for _, app in ipairs(spec.apps) do
 					-- Upstream's assertions still judge the LuaJIT run.
 					local lua_failures = check_spec(case, lua)
 					if #lua_failures == 0 then
-						report("spec_only", app, case, "native run fails upstream's spec (" .. native_failures[1] .. "); LuaJIT run meets it")
+						report("spec_only", app, case, "native run fails upstream's spec (" .. native_failures[1] .. "); " .. CANDIDATE .. " run meets it")
 					else
-						report("skipped", app, case, "neither run meets upstream's spec: native " .. native_failures[1] .. "; LuaJIT " .. lua_failures[1])
+						report("skipped", app, case, "neither run meets upstream's spec: native " .. native_failures[1] .. "; " .. CANDIDATE .. " " .. lua_failures[1])
 					end
 				else
 					local failures = check_spec(case, lua)
 					if not spec_only[app.path] then
-						if lua.rc ~= native.rc then failures[#failures + 1] = ("exit native=%d luajit=%d"):format(native.rc, lua.rc) end
-						if lua.out ~= native.out then failures[#failures + 1] = "stdout differs: native " .. ("%q"):format(native.out:sub(1, 200)) .. " luajit " .. ("%q"):format(lua.out:sub(1, 200)) end
-						if lua.err ~= native.err then failures[#failures + 1] = "stderr differs: native " .. ("%q"):format(native.err:sub(1, 200)) .. " luajit " .. ("%q"):format(lua.err:sub(1, 200)) end
+						if lua.rc ~= native.rc then failures[#failures + 1] = ("exit native=%d %s=%d"):format(native.rc, candidate, lua.rc) end
+						if lua.out ~= native.out then failures[#failures + 1] = "stdout differs: native " .. ("%q"):format(native.out:sub(1, 200)) .. " " .. candidate .. " " .. ("%q"):format(lua.out:sub(1, 200)) end
+						if lua.err ~= native.err then failures[#failures + 1] = "stderr differs: native " .. ("%q"):format(native.err:sub(1, 200)) .. " " .. candidate .. " " .. ("%q"):format(lua.err:sub(1, 200)) end
 					end
 					if #failures == 0 then report("agreed", app, case) else report("diverged", app, case, table.concat(failures, "; ")) end
 				end

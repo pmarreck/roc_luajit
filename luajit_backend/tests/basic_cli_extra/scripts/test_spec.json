@@ -9,6 +9,14 @@
       ]
     },
     {
+      "path": "apps/path_copy_mode.roc",
+      "cases": [
+        {
+          "name": "path-copy-mode"
+        }
+      ]
+    },
+    {
       "path": "apps/cmd_ops.roc",
       "cases": [
         {

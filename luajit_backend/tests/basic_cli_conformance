@@ -10,7 +10,11 @@
 # repository's own apps in the same test_spec.json format (edge cases the
 # upstream cases do not reach); every one of its cases must agree.
 #
-# Usage: basic_cli_conformance [ROC] [max-unsupported=N] [FILTER]
+# With candidate=wasm the second build is --target=wasm32 against the WASI
+# copy of basic-cli (luajit_backend/platforms/wasi_basic_cli, built once into
+# the work directory) and runs under wasmtime.
+#
+# Usage: basic_cli_conformance [ROC] [candidate=luajit|wasm] [max-unsupported=N] [extra-max-unsupported=N] [FILTER]
 set -u
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +35,12 @@ if [ "${1:-}" = "--build" ]; then
 	built() { [ "$1" -eq 0 ] || { [ "$1" -eq 2 ] && grep -qh "^0 errors and" "$2" "$3"; }; }
 	(cd "$d" && timeout 300 "$roc" build --opt=dev --no-cache "${replace[@]}" "$corpus/$app" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err") 2>"$d/nb.shell"
 	if ! built $? "$d/nb.out" "$d/nb.err"; then echo neither >"$d/built"; exit 0; fi
-	(cd "$d" && timeout 300 "$roc" build --target=luajit --no-cache "${replace[@]}" "$corpus/$app" --output="$d/app.lua" >"$d/lb.out" 2>"$d/lb.err") 2>"$d/lb.shell"
+	if [ -n "${ROC_LUAJIT_WASI_PLATFORM:-}" ]; then
+		wasm_replace=(--replace-dep "$basic_cli_url" "$ROC_LUAJIT_WASI_PLATFORM/main.roc" --replace-dep "$http_url" "$ROC_LUAJIT_ROC_HTTP_1_0_0/main.roc")
+		(cd "$d" && timeout 300 "$roc" build --target=wasm32 --opt=speed --no-cache "${wasm_replace[@]}" "$corpus/$app" --output="$d/app.wasm" >"$d/lb.out" 2>"$d/lb.err") 2>"$d/lb.shell"
+	else
+		(cd "$d" && timeout 300 "$roc" build --target=luajit --no-cache "${replace[@]}" "$corpus/$app" --output="$d/app.lua" >"$d/lb.out" 2>"$d/lb.err") 2>"$d/lb.shell"
+	fi
 	if built $? "$d/lb.out" "$d/lb.err"; then echo both >"$d/built"; else echo native-only >"$d/built"; fi
 	exit 0
 fi
@@ -48,11 +57,18 @@ for a in "$@"; do
 	esac
 done
 filter=""
-for a in "${pass[@]}"; do case "$a" in max-unsupported=*) ;; *) filter="$a" ;; esac; done
+candidate=luajit
+extra_max=0
+for a in "${pass[@]}"; do case "$a" in max-unsupported=*) ;; candidate=*) candidate="${a#candidate=}" ;; extra-max-unsupported=*) extra_max="${a#extra-max-unsupported=}" ;; *) filter="$a" ;; esac; done
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/basic_cli_conformance.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 jobs="${ROC_LUAJIT_JOBS:-$(nproc)}"
+if [ "$candidate" = wasm ]; then
+	"$root/luajit_backend/platforms/wasi_basic_cli/build" "$work/wasi_platform" "$roc" >"$work/wasi_platform.log" 2>&1 \
+		|| { cat "$work/wasi_platform.log"; echo "basic_cli_conformance: WASI platform build failed"; exit 2; }
+	export ROC_LUAJIT_WASI_PLATFORM="$work/wasi_platform"
+fi
 # Run one corpus in WORK/NAME: build its apps in parallel, then its cases.
 run_corpus() { # NAME CORPUS ARGS...
 	local w="$work/$1" c="$2"
@@ -62,9 +78,11 @@ run_corpus() { # NAME CORPUS ARGS...
 		grep -F -- "$filter" | xargs -r -P "$jobs" -n 1 "${BASH_SOURCE[0]}" --build "$w" "$roc" "$c"
 	luajit "$here/basic_cli_cases.lua" "$w" "$c" "$@"
 }
-run_corpus upstream "$corpus" "${pass[@]}"
+upstream_args=()
+for a in "${pass[@]}"; do case "$a" in extra-max-unsupported=*) ;; *) upstream_args+=("$a") ;; esac; done
+run_corpus upstream "$corpus" "${upstream_args[@]}"
 status=$?
-extra_args=(max-unsupported=0)
+extra_args=("max-unsupported=$extra_max" "candidate=$candidate")
 [ -n "$filter" ] && extra_args+=("$filter")
 run_corpus extra "$extra" "${extra_args[@]}"
 exit $((status + $?))

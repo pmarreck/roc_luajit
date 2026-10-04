@@ -22,6 +22,9 @@ ratchet="$(cat "$here/unsupported_ratchet")"
 echo_ratchet="$(cat "$here/echo_unsupported_ratchet")"
 fx_ratchet="$(cat "$here/fx_unsupported_ratchet")"
 basic_cli_ratchet="$(cat "$here/basic_cli_unsupported_ratchet")"
+# WASI: unsupported upstream and extra cases (processes, sockets, terminals,
+# SQLite and permission bits are not available to the WASI host).
+read -r wasi_ratchet wasi_extra_ratchet <"$here/basic_cli_wasi_unsupported_ratchet"
 jobs="${ROC_LUAJIT_JOBS:-$(nproc)}"
 threads="${ROC_LUAJIT_DIFF_THREADS:-$jobs}"
 export ROC_LUAJIT_JOBS="$jobs"
@@ -119,6 +122,8 @@ all_fail() { "$@" >/dev/null 2>&1; [ $? -eq "$expect_scripts" ]; }
 run_one "demo_expect negative control" all_fail "$here/demo_expect" "$here/fake_roc_wrong_output"
 run_one "basic_cli_conformance (basic-cli 0.23.0 examples, max-unsupported=$basic_cli_ratchet)" \
 	"$here/basic_cli_conformance" "max-unsupported=$basic_cli_ratchet"
+run_one "basic_cli_wasi_conformance (basic-cli 0.23.0 on the WASI host under wasmtime, max-unsupported=$wasi_ratchet/$wasi_extra_ratchet)" \
+	"$here/basic_cli_conformance" candidate=wasm "max-unsupported=$wasi_ratchet" "extra-max-unsupported=$wasi_extra_ratchet"
 run_one "exercism_conformance (Exercism Roc track, $(grep -vc '^#' "$root/luajit_backend/demos/exercism/MANIFEST") exercises)" \
 	"$here/exercism_conformance"
 

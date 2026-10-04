@@ -41,7 +41,7 @@
 		# roc-lang/examples' expect scripts against the demos (tests/demo_expect);
 		# hyperfine and jq drive bench/compare/run.
 		# perf counts user-mode instructions for bench/measure (Linux).
-		projectToolsFor = pkgs: [ pkgs.expect pkgs.hyperfine pkgs.jq pkgs.iproute2 pkgs.util-linux ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.perf ];
+		projectToolsFor = pkgs: [ pkgs.expect pkgs.hyperfine pkgs.jq pkgs.iproute2 pkgs.util-linux pkgs.wasmtime ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.perf ];
 		# Roc packages the basic-cli conformance tests build against, fetched once
 		# by hash and unpacked, so tests run offline with
 		# `roc build --replace-dep <url> <dir>/main.roc`.

@@ -30,7 +30,6 @@ main! = |_args| {
 	Path.create_all!(p("out"))?
 	show!("copy file", Path.copy!(p("fixtures/tree_ok/file"), p("out/f1")))?
 	show!("copied bytes", Path.read_utf8!(p("out/f1")))?
-	show!("copied mode is executable", Path.is_executable!(p("out/f1")))?
 	show!("copy over file", Path.copy!(p("fixtures/tree_ok/nested/inner"), p("out/f1")))?
 	show!("overwritten bytes", Path.read_utf8!(p("out/f1")))?
 	show!("copy onto itself", Path.copy!(p("out/f1"), p("out/f1")))?
