@@ -12,6 +12,7 @@ annotate=[
 	luajit_backend/bench/compare/rb = Ruby ports of the ./bm programs (run with --yjit) for bench/compare/run
 	luajit_backend/bench/compare/results = Per-host markdown tables from bench/compare/run
 	luajit_backend/bench/compare/run = Runs ./bm programs vs CPython/PyPy/Ruby YJIT/Elixir ports; checks outputs vs native Roc; hyperfine at K and 4K; writes results/<host>.md
+	luajit_backend/bench/compare/wasm = Informational: bench programs on wasm32 (WASI basic-cli) under wasmtime and wazero vs native and LuaJIT
 	luajit_backend/bench/measure = Median user instructions (perf), wall time and peak RSS (GNU time) of a command over N runs
 	luajit_backend/bench/profile/adapter.lua = performance-profile adapter core: loads a generated program as a factory, measures verified runs in-process (time or GC memory)
 	luajit_backend/bench/profile/driver.lua = performance-profile driver: native-output oracle, real clocks and GC, protocol JSON
@@ -86,6 +87,7 @@ annotate=[
 	luajit_backend/tests/tail_calls_cycle = Fixture test: scripts/tail_calls.lua decides mutually tail-calling functions together
 	luajit_backend/tests/toolchain.lua = Bootstrap LuaJIT 2.1/FFI/bit smoke used by the flake toolchain check
 	luajit_backend/tests/unsupported_ratchet = Max unsupported eval cases allowed by the differential run; lower as coverage grows
+	luajit_backend/tests/wasi_platform_offline = WASI platform names no URL; app builds offline (netns, empty Roc cache) and runs
 	luajit_backend/upstream_reports/README.md = Candidate upstream reports (Roc panics, dev-backend segfault, Zig SEGV); local notes, not filed
 	luajit_backend/upstream_reports/reproduce = Rebuild every upstream-report candidate and print each failure
 	luajit_backend/upstream_reports/set_fold_speed_abi_crash.roc = Native --opt=speed aborts in x86_64 SysV classify on a Set fold over a list (repro)

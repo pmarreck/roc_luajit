@@ -14,18 +14,25 @@ root="$(cd "$here/../../.." && pwd)"
 out="${1:?usage: build OUT_DIR [ROC]}"
 roc="${2:-$root/zig-out/bin/roc}"
 basic_cli="${ROC_LUAJIT_BASIC_CLI_0_23_0:?set by the project flake (nix develop)}"
+http_pkg="${ROC_LUAJIT_ROC_HTTP_1_0_0:?set by the project flake (nix develop)}"
 
 mkdir -p "$out/targets/wasm32" "$out/glue" || exit 1
 for f in "$basic_cli"/*.roc "$basic_cli"/*.md; do
 	[ -f "$f" ] && install -m 644 "$f" "$out/" || exit 1
 done
+# The http package basic-cli depends on is copied beside the platform and
+# referenced by path, so the platform names no URL: building it (in a Nix
+# sandbox, say) and building apps against it never need the network.
+rm -rf "$out/http" && cp -R "$http_pkg" "$out/http" && chmod -R u+w "$out/http" || exit 1
 # The wasm32 target: the host object plus the app, exporting the WASI
 # command entry point.
 awk '
+	/^\t\thttp: "https:\/\// { print "\t\thttp: \"http/main.roc\","; next }
 	{ print }
 	/^\t\tarm64musl: \{ inputs:/ { print "\t\twasm32: { inputs: [\"host.wasm\", app], exports: [\"_start\"] }," }
 ' "$basic_cli/main.roc" >"$out/main.roc" || exit 1
 grep -q 'wasm32: { inputs: \["host.wasm", app\]' "$out/main.roc" || { echo "build: could not add the wasm32 target" >&2; exit 1; }
+grep -q '^		http: "http/main.roc",' "$out/main.roc" || { echo "build: could not point http at the local copy" >&2; exit 1; }
 
 "$roc" glue "$root/src/glue/src/ZigGlue.roc" "$out/glue" "$out/main.roc" >"$out/glue/glue.log" 2>&1 \
 	|| { cat "$out/glue/glue.log" >&2; exit 1; }

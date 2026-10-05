@@ -16,7 +16,15 @@ wasmtime run -S inherit-env=y --dir=/ app.wasm ARGS...
 `build` copies basic-cli's platform sources, adds a `wasm32` target
 (`host.wasm` plus the app, exporting `_start`), generates Zig glue for that
 platform (`roc glue` with ZigGlue), and compiles `host.zig` for `wasm32-wasi`
-against it.
+against it. It also copies the http package basic-cli depends on beside the
+platform and points `main.roc` at that copy, so the platform names no URL:
+it builds without network access, and apps build against it offline
+(`luajit_backend/tests/wasi_platform_offline` checks both).
+
+The project flake packages it: `nix build github:pmarreck/roc_luajit#wasi-basic-cli`
+gives the platform directory, and `#roc` gives the compiler with the LuaJIT
+backend. On Linux the `roc` package runs Zig under the same 32-CPU cap as
+the project's scripts (Zig 0.16.0 segfaults compiling Roc with more).
 
 ## What works
 

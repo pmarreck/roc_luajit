@@ -124,6 +124,7 @@ run_one "basic_cli_conformance (basic-cli 0.23.0 examples, max-unsupported=$basi
 	"$here/basic_cli_conformance" "max-unsupported=$basic_cli_ratchet"
 run_one "basic_cli_wasi_conformance (basic-cli 0.23.0 on the WASI host under wasmtime, max-unsupported=$wasi_ratchet/$wasi_extra_ratchet)" \
 	"$here/basic_cli_conformance" candidate=wasm "max-unsupported=$wasi_ratchet" "extra-max-unsupported=$wasi_extra_ratchet"
+run_one "wasi_platform_offline (the WASI basic-cli platform builds and is used without network access)" "$here/wasi_platform_offline"
 run_one "exercism_conformance (Exercism Roc track, $(grep -vc '^#' "$root/luajit_backend/demos/exercism/MANIFEST") exercises)" \
 	"$here/exercism_conformance"
 

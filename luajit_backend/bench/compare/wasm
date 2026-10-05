@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Informational comparison (never a gate): the ./bm programs built for wasm32
+# against the WASI copy of basic-cli (luajit_backend/platforms/wasi_basic_cli)
+# and run under wasmtime and wazero, next to the native and LuaJIT builds.
+# The bench programs are headerless apps; their wasm builds are mechanical
+# basic-cli ports (the app header added, echo! replaced by Stdout.line!),
+# also built natively so the platform's own cost is visible. Every row must
+# print exactly what the native headerless build prints, or it is marked
+# wrong and not timed. Each runs under hyperfine at the benchmark's scale K
+# and at 4K arguments:
+#   total  wall time at K, everything included (startup and wasm compilation)
+#   work   (T(4K) - T(K)) / 3, the time per K of work with startup cancelled
+# Both are ratios to the native headerless build (--opt=speed). Arguments
+# reach the wasm module at run time, so a work ratio near the others also
+# shows the loop was not folded away at compile time.
+#
+# --mult=M multiplies K (both sizes grow).
+#
+# Usage: luajit_backend/bench/compare/wasm [--runs=N] [--mult=M] [FILTER]
+# Writes results/<machine>-wasm.md (see COMPARE_MACHINE below) beside this script and prints it.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../../.." && pwd)"
+roc="$root/zig-out/bin/roc"
+runs=10
+mult=1
+filter=""
+for a in "$@"; do
+	case "$a" in
+		--runs=*) runs="${a#--runs=}" ;;
+		--mult=*) mult="${a#--mult=}" ;;
+		*) filter="$a" ;;
+	esac
+done
+
+# The WASI platform build needs the project dev shell (basic-cli sources,
+# wasmtime, hyperfine, jq).
+if [ -z "${ROC_LUAJIT_BASIC_CLI_0_23_0:-}" ]; then
+	exec nix develop "$root" -c "$0" "$@"
+fi
+for tool in wasmtime wazero hyperfine jq luajit; do
+	command -v "$tool" >/dev/null || { echo "compare/wasm: $tool is not on PATH" >&2; exit 2; }
+done
+
+basic_cli_url="https://github.com/roc-lang/basic-cli/releases/download/0.23.0/GNN5tt2gKdX4dhawg4915C4YB193woHFdcCkz31fhGxv.tar.zst"
+http_url="https://github.com/roc-lang/http/releases/download/1.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst"
+work="$(mktemp -d "${TMPDIR:-/tmp}/bench_wasm.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+"$root/luajit_backend/platforms/wasi_basic_cli/build" "$work/platform" "$roc" >"$work/platform.log" 2>&1 \
+	|| { cat "$work/platform.log" >&2; echo "compare/wasm: WASI platform build failed" >&2; exit 1; }
+http=(--replace-dep "$http_url" "$ROC_LUAJIT_ROC_HTTP_1_0_0/main.roc")
+# The WASI platform carries its own http copy, so only basic-cli is replaced.
+wasi=(--replace-dep "$basic_cli_url" "$work/platform/main.roc")
+stock=(--replace-dep "$basic_cli_url" "$ROC_LUAJIT_BASIC_CLI_0_23_0/main.roc" "${http[@]}")
+
+args_of() { local s="" i; for i in $(seq 1 "$1"); do s+=" x"; done; printf '%s' "$s"; }
+mean() { jq -r '.results[0].mean' "$1"; }
+# The basic-cli port of a headerless bench program: header and import after
+# the leading comments, echo!(x) -> Stdout.line!(x)?.
+port() {
+	awk -v url="$basic_cli_url" '
+		!done && !/^#/ { print "app [main!] { pf: platform \"" url "\" }\n\nimport pf.Stdout\n"; done = 1 }
+		{ if (gsub(/echo!\(/, "Stdout.line!(")) sub(/\)$/, ")?"); print }
+	' "$1"
+}
+
+# Results are labeled by hardware, never by hostname (published files must
+# not name machines): <arch>-<os> unless COMPARE_MACHINE names it, and the
+# header records the CPU model.
+host="${COMPARE_MACHINE:-$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]')}"
+cpu="$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo 2>/dev/null | head -1)"
+[ -n "$cpu" ] || cpu="$(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
+out="$here/results/$host-wasm.md"
+mkdir -p "$here/results"
+{
+	echo "# Roc on wasm32 (WASI basic-cli) against native and LuaJIT"
+	echo
+	echo "$(date '+%Y-%m-%d %H:%M %Z'), $host ($cpu), commit $(git -C "$root" rev-parse --short HEAD), $runs runs each, K = scale x $mult, load average $(cut -d' ' -f1-3 /proc/loadavg)."
+	echo "Runtimes: $(wasmtime --version), wazero $(wazero version 2>/dev/null), LuaJIT $(luajit -v | cut -d' ' -f2)."
+	echo
+	echo "Each cell is the ratio to the native headerless build (lower is better): total time at K arguments / time per K of work with startup cancelled. Native's own times are in ms; wasm KB is the module size."
+	echo
+	echo "| benchmark | K | native ms | native basic-cli | Roc LuaJIT | wasmtime | wazero | wasm KB |"
+	echo "|---|---|---|---|---|---|---|---|"
+} > "$out"
+
+for src in startup fib dec_math dict_ops list_ops str_build; do
+	[ -n "$filter" ] && [[ "$src" != *"$filter"* ]] && continue
+	bench="$root/luajit_backend/bench/$src.roc"
+	scale="$(sed -n 's/^# scale: //p' "$bench")"
+	[ "$src" = startup ] || scale=$((scale * mult))
+	d="$work/$src"
+	mkdir -p "$d"
+	port "$bench" > "$d/cli.roc"
+	"$roc" build --opt=speed --no-cache "$bench" --output="$d/native" >"$d/build.log" 2>&1 || { echo "$src: native build failed" >&2; continue; }
+	"$roc" build --target=luajit --no-cache "$bench" --output="$d/app.lua" >>"$d/build.log" 2>&1 || { echo "$src: LuaJIT build failed" >&2; continue; }
+	"$roc" build --opt=speed --no-cache "${stock[@]}" "$d/cli.roc" --output="$d/native_cli" >>"$d/build.log" 2>&1 || { echo "$src: native basic-cli build failed" >&2; continue; }
+	"$roc" build --target=wasm32 --opt=speed --no-cache "${wasi[@]}" "$d/cli.roc" --output="$d/app.wasm" >>"$d/build.log" 2>&1 || { echo "$src: wasm build failed" >&2; continue; }
+	declare -A cmd=(
+		[native]="$d/native"
+		[native_cli]="$d/native_cli"
+		[luajit]="luajit $d/app.lua"
+		[wasmtime]="wasmtime run $d/app.wasm"
+		[wazero]="wazero run $d/app.wasm"
+	)
+	k="$(args_of "$scale")"
+	k4="$(args_of $((scale * 4)))"
+	want="$(${cmd[native]}$k 2>&1)"
+	declare -A total=() slope=()
+	for impl in native native_cli luajit wasmtime wazero; do
+		got="$(${cmd[$impl]}$k 2>&1)"
+		if [ "$got" != "$want" ]; then
+			echo "$src/$impl: printed '$got', native printed '$want'" >&2
+			total[$impl]=wrong
+			continue
+		fi
+		hyperfine -N --style=none --warmup 2 --runs "$runs" --export-json "$d/$impl.k.json" "${cmd[$impl]}$k" >/dev/null 2>&1
+		hyperfine -N --style=none --warmup 2 --runs "$runs" --export-json "$d/$impl.k4.json" "${cmd[$impl]}$k4" >/dev/null 2>&1
+		total[$impl]="$(mean "$d/$impl.k.json")"
+		slope[$impl]="$(awk -v a="$(mean "$d/$impl.k.json")" -v b="$(mean "$d/$impl.k4.json")" 'BEGIN { print (b - a) / 3 }')"
+	done
+	row="| $src | $scale | $(awk -v t="${total[native]}" 'BEGIN { printf "%.1f", t * 1000 }') |"
+	for impl in native_cli luajit wasmtime wazero; do
+		if [ "${total[$impl]}" = wrong ]; then
+			row+=" wrong output |"
+		elif [ "$src" = startup ]; then
+			row+=" $(awk -v t="${total[$impl]}" -v n="${total[native]}" 'BEGIN { printf "%.1fx", t / n }') |"
+		else
+			row+=" $(awk -v t="${total[$impl]}" -v n="${total[native]}" -v s="${slope[$impl]}" -v ns="${slope[native]}" 'BEGIN { printf "%.1fx / %.1fx", t / n, (ns > 0 ? s / ns : 0) }') |"
+		fi
+	done
+	row+=" $(( $(wc -c <"$d/app.wasm") / 1024 )) |"
+	echo "$row" >> "$out"
+	echo "$row" >&2
+	unset cmd total slope
+done
+echo >> "$out"
+echo "startup has no work term (it does none). A work ratio near 0 or negative means the run is too short for the noise; read the total instead. wasmtime and wazero compile the module on every run unless their caches hold it, so total includes compilation." >> "$out"
+cat "$out"

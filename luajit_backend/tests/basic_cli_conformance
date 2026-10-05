@@ -36,7 +36,8 @@ if [ "${1:-}" = "--build" ]; then
 	(cd "$d" && timeout 300 "$roc" build --opt=dev --no-cache "${replace[@]}" "$corpus/$app" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err") 2>"$d/nb.shell"
 	if ! built $? "$d/nb.out" "$d/nb.err"; then echo neither >"$d/built"; exit 0; fi
 	if [ -n "${ROC_LUAJIT_WASI_PLATFORM:-}" ]; then
-		wasm_replace=(--replace-dep "$basic_cli_url" "$ROC_LUAJIT_WASI_PLATFORM/main.roc" --replace-dep "$http_url" "$ROC_LUAJIT_ROC_HTTP_1_0_0/main.roc")
+		# The WASI platform carries its own http copy, so only basic-cli is replaced.
+		wasm_replace=(--replace-dep "$basic_cli_url" "$ROC_LUAJIT_WASI_PLATFORM/main.roc")
 		(cd "$d" && timeout 300 "$roc" build --target=wasm32 --opt=speed --no-cache "${wasm_replace[@]}" "$corpus/$app" --output="$d/app.wasm" >"$d/lb.out" 2>"$d/lb.err") 2>"$d/lb.shell"
 	else
 		(cd "$d" && timeout 300 "$roc" build --target=luajit --no-cache "${replace[@]}" "$corpus/$app" --output="$d/app.lua" >"$d/lb.out" 2>"$d/lb.err") 2>"$d/lb.shell"

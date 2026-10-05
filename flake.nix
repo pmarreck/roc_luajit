@@ -80,7 +80,35 @@
 			pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; };
 		in pkgs.rust-bin.stable.latest.minimal.override { targets = rustTargets.${system}; };
 	in {
-		packages = forAll (system: upstream.packages.${system});
+		packages = forAll (system: let
+			pkgs = import nixpkgs { inherit system; };
+			upstreamRoc = upstream.packages.${system}.roc;
+			# Zig 0.16.0 segfaults compiling roc when it sees more than 32 CPUs
+			# (luajit_backend/scripts/zig_cpu_cap.bash, ARCHITECTURE.md §8); a
+			# Nix build sees every CPU, so its zig runs under the same cap.
+			roc = if pkgs.stdenv.hostPlatform.isLinux then upstreamRoc.overrideAttrs (old: {
+				nativeBuildInputs = [
+					(pkgs.writeShellScriptBin "zig" ''
+						source ${./luajit_backend/scripts/zig_cpu_cap.bash}
+						exec ${pkgs.util-linux}/bin/taskset -c "$(zig_cpu_list)" ${pkgs.zig_0_16}/bin/zig "$@"
+					'')
+				] ++ old.nativeBuildInputs;
+			}) else upstreamRoc;
+		in upstream.packages.${system} // {
+			inherit roc;
+			default = roc;
+			# The WASI copy of basic-cli 0.23.0 (luajit_backend/platforms/wasi_basic_cli):
+			# apps build against it with
+			#   roc build --target=wasm32 --replace-dep <basic-cli URL> <this>/main.roc
+			# and run under a WASI runtime. Self-contained, so it builds here
+			# without network access and apps build against it offline.
+			wasi-basic-cli = pkgs.runCommand "roc-luajit-wasi-basic-cli-0.23.0" ({
+				nativeBuildInputs = [ pkgs.zig_0_16 ];
+			} // rocPackagesFor pkgs) ''
+				export HOME=$TMPDIR XDG_CACHE_HOME=$TMPDIR/cache ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-local
+				bash ${self}/luajit_backend/platforms/wasi_basic_cli/build "$out" ${roc}/bin/roc
+			'';
+		});
 		apps = forAll (system: upstream.apps.${system});
 		formatter = forAll (system: upstream.formatter.${system});
 		devShells = forAll (system: let pkgs = import nixpkgs { inherit system; }; in {

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# The WASI copy of basic-cli is self-contained: its main.roc names no URL
+# (the http package it depends on is copied beside it), so building it in a
+# network-less Nix sandbox and building apps against it later both work
+# offline. Checked by building a basic-cli app against it, with an empty Roc
+# cache, inside a private network namespace, and running it under wasmtime.
+#
+# Usage: wasi_platform_offline [ROC]
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+roc="${1:-$root/zig-out/bin/roc}"
+basic_cli_url="https://github.com/roc-lang/basic-cli/releases/download/0.23.0/GNN5tt2gKdX4dhawg4915C4YB193woHFdcCkz31fhGxv.tar.zst"
+failures=0
+fail() { echo "wasi_platform_offline: $1"; failures=$((failures + 1)); }
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/wasi_offline.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+out="$("$root/luajit_backend/platforms/wasi_basic_cli/build" "$work/platform" "$roc" 2>&1)" \
+	|| { echo "$out"; echo "wasi_platform_offline: platform build failed"; exit 1; }
+if grep -n '"https\?://' "$work/platform/main.roc" > "$work/urls"; then
+	fail "the platform's main.roc still names URLs: $(cat "$work/urls")"
+fi
+[ -f "$work/platform/http/main.roc" ] || fail "the http package is not copied beside the platform"
+
+mkdir -p "$work/app" "$work/cache"
+cat > "$work/app/hello.roc" <<EOF
+app [main!] { pf: platform "$basic_cli_url" }
+
+import pf.OsStr
+import pf.Stdout
+
+main! : List(OsStr) => Try({}, _)
+main! = |args| {
+	Stdout.line!("offline \${U64.to_str(List.len(args))}")?
+	Ok({})
+}
+EOF
+build_out="$(cd "$work/app" && XDG_CACHE_HOME="$work/cache" "$root/luajit_backend/scripts/netns_run" \
+	"$roc" build --target=wasm32 --opt=speed --replace-dep "$basic_cli_url" "$work/platform/main.roc" hello.roc --output=hello.wasm 2>&1)"
+[ -f "$work/app/hello.wasm" ] || fail "offline app build failed: $build_out"
+if [ -f "$work/app/hello.wasm" ]; then
+	got="$(wasmtime run "$work/app/hello.wasm" a b 2>&1)"
+	[ "$got" = "offline 2" ] || fail "the app printed '$got', expected 'offline 2'"
+fi
+
+[ "$failures" -eq 0 ] || exit 1
+echo "wasi_platform_offline: passed"
