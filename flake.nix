@@ -105,6 +105,13 @@
 					export NIX_CFLAGS_COMPILE="-iframework ${sdk}/System/Library/Frameworks $NIX_CFLAGS_COMPILE"
 					export NIX_LDFLAGS="-L${sdk}/usr/lib $NIX_LDFLAGS"
 				'';
+				# roc links native Mach-O programs against the libSystem stub in a
+				# `darwin` directory beside its executable, as releases ship it;
+				# without it, roc falls back to the build tree's path, which the
+				# sandbox deletes.
+				postInstall = (old.postInstall or "") + ''
+					cp -R src/cli/darwin "$out/bin/darwin"
+				'';
 				meta = old.meta // { broken = false; };
 			});
 		in upstream.packages.${system} // {
