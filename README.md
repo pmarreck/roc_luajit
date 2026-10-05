@@ -1,59 +1,58 @@
-# Work in progress!
+# roc_luajit
 
-[Roc](https://www.roc-lang.org) is not ready for a 0.1 release yet, but we do have:
+A standalone Roc-to-LuaJIT compiler. This repository owns the Lua emitter,
+runtime, platform hosts, CLI driver, and backend tests. Roc's compiler libraries
+are fetched as one pinned Zig dependency; there is no compiler fork to maintain.
 
-- [**installation** guide](https://www.roc-lang.org/install)
-- [**tutorial**](docs/mini-tutorial-new-compiler.md)
-- [**docs** for the standard library](https://roc-lang.org/docs/main/)
-- [**examples**](test/echo/all_syntax_test.roc)
-- [**faq**: frequently asked questions](https://www.roc-lang.org/faq)
-- [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
+Requires Zig 0.16.0 and LuaJIT 2.1. The optional Nix shell provides both:
 
-If you'd like to contribute, [get started here](CONTRIBUTING/README.md). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
+```sh
+nix develop
+zig build roc
+zig-out/bin/roc build hello.roc --output=hello.lua
+luajit hello.lua
+```
 
-## Sponsors
+The default backend is LuaJIT. `--target=luajit` remains accepted for existing
+scripts. `roc check app.roc` checks without emitting Lua. Headerless `main!`
+programs use the default Echo platform; explicit platforms provide `host.lua`
+or match an exact fingerprint in the bundled host registry.
 
-You can 💜 **sponsor** 💜 Roc on:
+The driver calls Roc's dependency resolution, checking, compile-time
+finalization, LIR lowering, and static-data libraries. The emitter receives
+ARC-complete LIR and follows its reference-count statements directly. The
+implemented backend targets specialized (`.lss`) LIR; boxy instructions produce
+named unsupported reports.
 
-- [Every.org](https://www.every.org/roc-programming-language-foundation?donateTo=roc-programming-language-foundation) (supports credit card, bank, Venmo, PayPal, cryptocurrencies, and more)
-- [GitHub](https://github.com/sponsors/roc-lang)
-- [Liberapay](https://liberapay.com/roc_lang)
+```sh
+zig build test                         # emitter and host tests
+zig build build-test-luajit-differential
+zig-out/bin/luajit-differential-runner max-cases=20
+zig build native                       # optional pinned upstream native oracle
+./test-luajit --portable               # runtime, CLI, and differential tests
+./test-luajit                          # full backend suite (Linux host tests)
+```
 
-We are very grateful for our corporate sponsors [Lambda Class](https://lambdaclass.com), [ohne-makler](https://www.ohne-makler.net), and [Decem](https://www.decem.com.au):
+`roc-native` is installed separately from this CLI. Its optional build fetches
+a complete upstream checkout at the same SHA read from `build.zig.zon` (the
+compiler-library package omits CLI test/runtime assets). Native comparisons use it;
+the differential runner compares 64-bit LSS LIR with Roc's interpreter and
+honors the upstream corpus's serial scheduling metadata. The eval
+corpus and harness are imported from the pinned package, rather than copied.
+Backend fixtures under `test/` supply the retained platform and SIMD test assets.
 
-[<img src="https://github.com/user-attachments/assets/3241c389-8f04-4b45-9dbb-b94a6f7cb85e" height="60" alt="Lambda Class logo"/>](https://lambdaclass.com)
-&nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://www.ohne-makler.net/static/img/brand/logo.svg" height="60" alt="ohne-makler logo"/>](https://www.ohne-makler.net)
-&nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://github.com/roc-lang/roc/assets/1094080/fd2a759c-7f6d-4f57-9eca-9601deba87b6" height="60" alt="Decem logo"/>](https://www.decem.com.au)
+To update the compiler:
 
-If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
+```sh
+zig fetch --save=roc 'git+https://github.com/roc-lang/roc.git#<full-commit-sha>'
+zig build roc test build-test-luajit-differential
+```
 
-We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
+Zig updates the URL and content hash together. The initial dependency baseline
+comes from [upstream draft PR #12071](https://github.com/roc-lang/roc/pull/12071).
+Read [design.md](design.md) for compiler boundaries and
+[luajit_backend/README.md](luajit_backend/README.md) for demos and host limitations.
 
-- [Peter Marreck](https://github.com/pmarreck)
-- [Barry Moore](https://github.com/chiroptical)
-- Eric Andresen
-- [Jackson Lucky](https://github.com/jluckyiv)
-- [Agus Zubiaga](https://github.com/agu-z)
-- [Angelo Ceccato](https://github.com/AngeloChecked)
-- [Krzysztof G.](https://github.com/krzysztofgb)
-- [Sam Mohr](https://github.com/smores56)
-- [Steven Chen](https://github.com/megakilo)
-- [Drew Lazzeri](https://github.com/asteroidb612)
-- [Alex Binaei](https://github.com/mrmizz)
-- [Jono Mallanyk](https://github.com/jonomallanyk)
-- [Chris Packett](https://github.com/chris-packett)
-- [James Birtles](https://github.com/jamesbirtles)
-- [Ivo Balbaert](https://github.com/Ivo-Balbaert)
-- [Lucas Rosa](https://github.com/rvcas)
-- [Jonas Schell](https://github.com/Ocupe)
-- [Christopher Dolan](https://github.com/cdolan)
-- [Nick Gravgaard](https://github.com/nick-gravgaard)
-- [Zeljko Nesic](https://github.com/popara)
-- [Shritesh Bhattarai](https://github.com/shritesh)
-- [Richard Feldman](https://github.com/rtfeldman)
-- [Ayaz Hafiz](https://github.com/ayazhafiz)
-- [Anthony Bullard](https://github.com/gamebox)
-
-Thank you all so much for helping Roc progress!
+The retained basic-cli 0.23.0/WASI comparison currently fails upstream checking
+on redundant type imports. A compatible basic-cli release is needed for that
+Linux conformance lane; the failure remains visible in the full suite.

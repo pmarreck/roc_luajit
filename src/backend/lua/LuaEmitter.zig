@@ -280,6 +280,8 @@ const Lowering = enum {
     checked_arith,
     compare,
     bool_not,
+    bool_identity,
+    list_prefetch,
     int_to_str,
     dec_mul,
     division,
@@ -337,6 +339,8 @@ const lowerings = blk: {
     for ([_]LowLevel{ .num_int_add_crash_on_overflow, .num_int_sub_crash_on_overflow, .num_int_mul_crash_on_overflow }) |op| table.set(op, .checked_arith);
     for ([_]LowLevel{ .num_is_eq, .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte }) |op| table.set(op, .compare);
     table.set(.bool_not, .bool_not);
+    table.set(.bool_likely, .bool_identity);
+    table.set(.list_prefetch, .list_prefetch);
     for ([_]LowLevel{ .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str }) |op| table.set(op, .int_to_str);
     table.set(.dec_mul, .dec_mul);
     for ([_]LowLevel{ .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_div_by_checked, .num_div_trunc_by_checked, .num_rem_by_checked, .num_mod_by_checked }) |op| table.set(op, .division);
@@ -473,6 +477,8 @@ const list_shapes = blk: {
     t.set(.list_set_in_place_unsafe, .{ "set", "01cWIDP" });
     t.set(.list_with_capacity, .{ "with_capacity", "0W" });
     t.set(.list_reserve, .{ "reserve", "01WIDP" });
+    t.set(.list_reserve_for_append, .{ "reserve_for_append", "01WIDP" });
+    t.set(.list_clear, .{ "clear", "0WDP" });
     t.set(.list_release_excess_capacity, .{ "release_excess_capacity", "0WIDP" });
     t.set(.list_first, .{ "first", "0WM" });
     t.set(.list_last, .{ "last", "0WM" });
@@ -798,6 +804,7 @@ const Emitter = struct {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -2046,6 +2053,7 @@ const Emitter = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -2204,7 +2212,7 @@ const Emitter = struct {
         try self.w().writeAll("end\n");
     }
 
-    fn emitRc(self: *Emitter, comptime op: []const u8, value: LIR.LocalId, rc: LIR.RcHelper, count: u16, depth: usize) EmitError!void {
+    fn emitRc(self: *Emitter, comptime op: []const u8, value: LIR.LocalId, rc: LIR.RcHelper, count: u32, depth: usize) EmitError!void {
         const key = switch (rc) {
             .concrete => |helper| helper,
             .boxy => return self.refuse("boxy rc helper", .{}),
@@ -2590,13 +2598,13 @@ const Emitter = struct {
         try self.w().writeAll("\n");
     }
 
-    fn tagVariantPayloadLayout(self: *Emitter, union_layout: layout.Idx, variant_index: u16) layout.Idx {
+    fn tagVariantPayloadLayout(self: *Emitter, union_layout: layout.Idx, variant_index: u32) layout.Idx {
         const tu = self.layouts().getLayout(union_layout).getTagUnion();
         const variants = self.layouts().getTagUnionVariants(self.layouts().getTagUnionData(tu.idx));
         return variants.get(variant_index).payload_layout;
     }
 
-    fn emitTagLiteral(self: *Emitter, union_layout: layout.Idx, variant_index: u16, discriminant: u16, payload: ?LIR.LocalId) EmitError!void {
+    fn emitTagLiteral(self: *Emitter, union_layout: layout.Idx, variant_index: u32, discriminant: u32, payload: ?LIR.LocalId) EmitError!void {
         try self.w().print("{{{d}", .{discriminant});
         if (payload) |local| {
             const payload_layout = self.tagVariantPayloadLayout(union_layout, variant_index);
@@ -3742,6 +3750,15 @@ const Emitter = struct {
                 try self.emitLocal(GuardedList.at(args, 1));
                 try self.w().writeAll(")");
             },
+            .bool_identity => {
+                if (args.len != 1 or operand != .bool) return self.refuse("bool_likely requires one Bool operand", .{});
+                try self.emitLocal(GuardedList.at(args, 0));
+            },
+            .list_prefetch => {
+                // Prefetch is a performance hint with a zero-sized result.
+                if (args.len != 2 or self.reprOfLocal(target) != .zst) return self.refuse("list_prefetch requires a list, an index, and a zero-sized result", .{});
+                try self.w().writeAll("rt.ZST");
+            },
             .bool_not => {
                 try self.w().writeAll("not ");
                 try self.emitArgs(span);
@@ -3932,6 +3949,7 @@ fn callee(stmt: LIR.CFStmt) ?LIR.LirProcSpecId {
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,

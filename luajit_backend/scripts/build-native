@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# The optional native oracle uses a full upstream checkout at the package's SHA.
+set -eu
+zig_exe="$1"
+repository="$2"
+revision="$3"
+output="$4"
+work="$(mktemp -d "${TMPDIR:-/tmp}/roc_native_oracle.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+git init -q "$work"
+git -C "$work" fetch -q --depth=1 "$repository" "$revision"
+git -C "$work" checkout -q --detach FETCH_HEAD
+cd "$work"
+"$zig_exe" build roc -j2 --prefix "$output"

@@ -1,5 +1,11 @@
 # roc_luajit architecture (M0)
 
+Current integration: this is a standalone Zig package. `build.zig.zon` pins Roc's
+compiler libraries; `src/main.zig` drives checking and finalized runtime lowering.
+The compiler paths below document the original inspected upstream revision,
+not files maintained in this repository. The backend is under `src/backend/lua`.
+
+
 Status: M0 delivered 2026-09-30; BDFN (Benevolent Dictator For Now) approved the output dialect (§3) and ARC policy C (§4) and cleared M1 to proceed.
 Inspected revision: `64ee0aeddc8cc0db94b446b4e4aee7e7f7c01090` (roc-lang/roc `main`), Zig 0.16.0.
 Every `path:line` below refers to that revision. Claims marked *inferred* were read from code but not executed; claims marked *measured* have a probe or command behind them.

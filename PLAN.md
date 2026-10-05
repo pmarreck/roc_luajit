@@ -1,3 +1,9 @@
+# Historical implementation log
+
+The entries below record the original fork experiment. Current compiler sources
+and their test suite belong to the pinned upstream dependency. Build and test
+commands for this standalone package are in [README.md](README.md).
+
 # PLAN
 
 ## Standing directive (BDFN (Benevolent Dictator For Now), 2026-09-30 19:21 EDT)

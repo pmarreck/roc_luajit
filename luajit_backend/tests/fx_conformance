@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end conformance for `roc build --target=luajit` on the fx test platform
 # (test/fx, LuaJIT host test/fx/platform/host.lua). For every IO spec in
-# src/cli/test/fx_test_specs.zig the app is built natively (--opt=dev, the
+# the pinned Roc package's fx test specs the app is built natively (--opt=dev, the
 # oracle, linked with host.zig) and for LuaJIT, both run with `--test <spec>`
 # (each host checks the spec's stdin/stdout/stderr sequence itself), and their
 # stdout bytes, stderr bytes and exit status are compared.
@@ -17,6 +17,7 @@ set -u
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
+native_roc="${ROC_LUAJIT_NATIVE_ROC:-$root/zig-out/bin/roc-native}"
 
 # Build one file: `--build WORK ROC FILE` writes WORK/build/<name>/{native,app.lua}
 # and a `built` verdict (both, native-only or neither).
@@ -24,7 +25,7 @@ if [ "${1:-}" = "--build" ]; then
 	work="$2" roc="$3" file="$4"
 	d="$work/build/$(printf %s "$file" | sha256sum | cut -c1-16)"
 	mkdir -p "$d"
-	if ! (cd "$root" && timeout 300 "$roc" build --opt=dev --no-cache "$file" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err"); then
+	if ! (cd "$root" && timeout 300 "$native_roc" build --opt=dev --no-cache "$file" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err"); then
 		echo neither >"$d/built"
 		exit 0
 	fi
@@ -95,7 +96,7 @@ while IFS=$'\1' read -r -d '' file spec; do
 	printf '%s' "$file" >"$work/specs/$n/file"
 	printf '%s' "$spec" >"$work/specs/$n/spec"
 	files[$file]=1
-done < <(luajit "$here/fx_specs.lua" "$root/src/cli/test/fx_test_specs.zig" 2>/dev/null)
+done < <(luajit "$here/fx_specs.lua" "$root/zig-out/test-data/fx_test_specs.zig" 2>/dev/null)
 
 if [ "$n" -gt 0 ]; then
 	printf '%s\0' "${!files[@]}" | xargs -0 -P "$jobs" -n 1 "${BASH_SOURCE[0]}" --build "$work" "$roc"

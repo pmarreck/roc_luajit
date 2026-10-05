@@ -710,6 +710,16 @@ return function(crash, ZST, SORT)
 		return (reserve(l, num(spare), w, inc, dec, ip))
 	end
 
+	function M.ll_reserve_for_append(l, spare, w, inc, dec, ip)
+		if w == 0 then return (M.zst(l[3])) end
+		return (reserve_for_append(l, num(spare), w, inc, dec, ip))
+	end
+
+	function M.ll_clear(l, w, dec, ip)
+		if w == 0 then return (M.zst(0)) end
+		return (M.sublist(l, 0, 0, dec, ip))
+	end
+
 	function M.ll_release_excess_capacity(l, w, inc, dec, ip)
 		if w == 0 then return (M.zst(l[3])) end
 		return (M.release_excess_capacity(l, w, inc, dec, ip))

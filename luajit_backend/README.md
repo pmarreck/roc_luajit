@@ -14,6 +14,12 @@ That writes `zig-out/bin/roc`. `./test-luajit` rebuilds the same binary in Debug
 
 ## A basic-cli app
 
+The basic-cli 0.23.0 release currently fails checking under the pinned Roc
+compiler because it redundantly exposes imported type names. The example below
+documents that older release; its native/WASI conformance checks require a
+compatible release. Headerless programs and this repository's Lua platform are
+covered by the portable suite.
+
 Save this as `hello.roc`:
 
 ```roc

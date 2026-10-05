@@ -1,6 +1,6 @@
 # Roc LuaJIT backend
 
-BDFN (Benevolent Dictator For Now) requested this experiment on September 30, 2026. The BDFN-supplied design is [SPEC.md](SPEC.md), copied unchanged from BDFN's notes. This checkout forks Roc at `64ee0aeddc8cc0db94b446b4e4aee7e7f7c01090`; preserve upstream's `main` branch convention and compiler invariants.
+BDFN (Benevolent Dictator For Now) requested this experiment on September 30, 2026. The BDFN-supplied design is [SPEC.md](SPEC.md), copied unchanged from BDFN's notes. The original experiment forked Roc. This repository now imports Roc's compiler libraries through the single pinned dependency in `build.zig.zon`; preserve the upstream compiler invariants.
 
 ## Purpose and scope
 

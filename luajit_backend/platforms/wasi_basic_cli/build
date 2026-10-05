@@ -12,7 +12,7 @@ set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../../.." && pwd)"
 out="${1:?usage: build OUT_DIR [ROC]}"
-roc="${2:-$root/zig-out/bin/roc}"
+roc="${2:-${ROC_LUAJIT_NATIVE_ROC:-$root/zig-out/bin/roc-native}}"
 basic_cli="${ROC_LUAJIT_BASIC_CLI_0_23_0:?set by the project flake (nix develop)}"
 http_pkg="${ROC_LUAJIT_ROC_HTTP_1_0_0:?set by the project flake (nix develop)}"
 
@@ -34,7 +34,7 @@ awk '
 grep -q 'wasm32: { inputs: \["host.wasm", app\]' "$out/main.roc" || { echo "build: could not add the wasm32 target" >&2; exit 1; }
 grep -q '^		http: "http/main.roc",' "$out/main.roc" || { echo "build: could not point http at the local copy" >&2; exit 1; }
 
-"$roc" glue "$root/src/glue/src/ZigGlue.roc" "$out/glue" "$out/main.roc" >"$out/glue/glue.log" 2>&1 \
+"$roc" glue "$root/zig-out/test-data/ZigGlue.roc" "$out/glue" "$out/main.roc" >"$out/glue/glue.log" 2>&1 \
 	|| { cat "$out/glue/glue.log" >&2; exit 1; }
 
 # Every hosted function host.zig does not implement gets a stub with the
@@ -56,9 +56,6 @@ implemented="$(grep -o 'export fn hosted_[a-z0-9_]*' "$here/host.zig" | sed 's/e
 		done
 } >"$out/glue/abi_with_stubs.zig" || exit 1
 
-zig build-obj -target wasm32-wasi -O ReleaseFast -fPIC -ffunction-sections -fdata-sections -fcompiler-rt \
-	--name host -femit-bin="$out/targets/wasm32/host.wasm" \
-	--dep abi --dep shim_symbols -Mroot="$here/host.zig" \
-	-Mabi="$out/glue/abi_with_stubs.zig" \
-	-Mshim_symbols="$root/src/builtins/shim_symbols.zig" || exit 1
+(cd "$root" && zig build wasi-platform-host -Dwasi-abi="$out/glue/abi_with_stubs.zig" -j2) || exit 1
+cp "$root/zig-out/wasi-host.wasm" "$out/targets/wasm32/host.wasm" || exit 1
 echo "built $out (wasm32 host $(wc -c <"$out/targets/wasm32/host.wasm") bytes)"
