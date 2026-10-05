@@ -93,7 +93,20 @@
 						exec ${pkgs.util-linux}/bin/taskset -c "$(zig_cpu_list)" ${pkgs.zig_0_16}/bin/zig "$@"
 					'')
 				] ++ old.nativeBuildInputs;
-			}) else upstreamRoc;
+			}) else upstreamRoc.overrideAttrs (old: let
+				sdk = pkgs.apple-sdk_26.sdkroot;
+			in {
+				# Zig finds Apple frameworks and .tbd stubs only through flags it
+				# parses from these variables: `-iframework DIR`, and `-L` joined
+				# to its directory (a separate `-L DIR` is skipped). Its own SDK
+				# detection needs xcrun, which the sandbox lacks. Set before the zig
+				# setup hook's build phase; the install phase inherits them.
+				preBuild = (old.preBuild or "") + ''
+					export NIX_CFLAGS_COMPILE="-iframework ${sdk}/System/Library/Frameworks $NIX_CFLAGS_COMPILE"
+					export NIX_LDFLAGS="-L${sdk}/usr/lib $NIX_LDFLAGS"
+				'';
+				meta = old.meta // { broken = false; };
+			});
 		in upstream.packages.${system} // {
 			inherit roc;
 			default = roc;
