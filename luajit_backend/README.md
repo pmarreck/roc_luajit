@@ -1,6 +1,6 @@
 # Trying the LuaJIT backend
 
-`roc build --target=luajit` turns a Roc app into one self-contained Lua file that runs on LuaJIT 2.1. The runtime is embedded in that file, and so is the host for the platforms this repository bundles a host for. Design notes live in `ARCHITECTURE.md`; the plan and progress in `PLAN.md`.
+`roc build --target=luajit` turns a Roc app into one self-contained Lua file that runs on LuaJIT 2.1. The runtime is embedded in that file, and so is the host for the platforms this repository bundles a host for. Design notes live in `design.md`; open work in `TODO.md`.
 
 ## Build roc
 
@@ -66,4 +66,4 @@ roc recognizes the platform by a SHA-256 of its `.roc` sources and uses the matc
 
 - basic-cli: every hosted function is implemented and every upstream example case that runs on Linux agrees with the native build. HTTP and SQLite load libcurl and libsqlite3 at first use (`ROC_LUAJIT_LIBCURL` and `ROC_LUAJIT_LIBSQLITE3` name them, as the project's dev shell does, else the system's copies are used).
 - The basic-cli host's file and directory calls use Linux structures (`statx`, Linux `dirent`); macOS is untested.
-- Speed: slower than native builds, most of all for Dict, List and Dec code (Dec arithmetic measured about 4x native, Dict operations about 18x). `PLAN.md` has the current numbers.
+- Speed: slower than native builds, most of all for Dict, List and Dec code (Dec arithmetic measured about 4x native, Dict operations about 18x). `docs/history/PLAN.md` has the measurements.

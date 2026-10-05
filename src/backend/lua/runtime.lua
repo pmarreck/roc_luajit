@@ -1,5 +1,5 @@
 -- roc_luajit runtime, embedded at the top of every emitted program.
--- Representations (ARCHITECTURE.md §5): U8..I32 are Lua numbers, U64/I64 are
+-- Representations (design.md): U8..I32 are Lua numbers, U64/I64 are
 -- Lua numbers when -2^53 < v < 2^53 and uint64_t/int64_t cdata otherwise
 -- (see "64-bit integers"), Bool is a Lua boolean, Str is an immutable Lua
 -- string, zero-sized values are the ZST sentinel.
@@ -409,8 +409,9 @@ end
 -- that a number concatenated onto a string is formatted straight into the
 -- buffer and never becomes an interned Lua string; interning millions of
 -- short-lived number strings made LuaJIT's string table the dominant,
--- super-linear cost of str_build (ARCHITECTURE.md). A plain number costs no
--- allocation, so its cost does not depend on LuaJIT sinking a table. Views
+-- super-linear cost of str_build (docs/history/ARCHITECTURE.md §10). A plain
+-- number costs no allocation, so its cost does not depend on LuaJIT sinking a
+-- table. Views
 -- and leaves share STR_VIEW. Hosts never see a number or a table: the
 -- emitter converts every Str crossing to a host (R.h<layout>) with M.str.
 -- Concatenation makes views, so repeated
@@ -451,7 +452,7 @@ for k = 1, 22 do POW10[k] = 10 ^ k end
 -- Decimal length of an integer-valued Lua number as %d prints it, by exact
 -- power-of-ten comparisons: appending a number leaf adds this to the view's
 -- byte count instead of reading the buffer's length back after the write
--- (ARCHITECTURE.md §10, number leaves).
+-- (docs/history/ARCHITECTURE.md §10, number leaves).
 local function int_decimal_len(v)
 	local d = 1
 	if v < 0 then d, v = 2, -v end
@@ -712,7 +713,7 @@ function M.str_match(s, prefix, delims, tail)
 end
 
 -- strToBytes: a fresh exact-capacity List(U8). Heap strings' capacity is not
--- modelled (ARCHITECTURE.md decision log).
+-- modelled (docs/history/ARCHITECTURE.md §10).
 function M.str_to_utf8(s)
 	local n = #s
 	if n == 0 then return (M.L.empty()) end
@@ -727,7 +728,7 @@ function M.str_release_excess_capacity(s) return s end
 
 -- Boxes ------------------------------------------------------------------------
 -- A box is a counted cell { rc = count, v = value }. Counts follow the LIR RC
--- statements exactly (ARCHITECTURE.md section 4, policy C); uniqueness checks read rc.
+-- statements exactly (design.md, policy C); uniqueness checks read rc.
 -- A host may give a box a `drop` function, called once with the payload when
 -- the box is released for the last time: the counterpart of a native host's
 -- roc_dealloc finalizer for resources such as files and child processes.

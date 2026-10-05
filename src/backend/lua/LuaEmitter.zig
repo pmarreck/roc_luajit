@@ -8,7 +8,7 @@
 //! runtime's helper for the statement's value representation.
 //!
 //! Anything outside the implemented subset is refused with a named reason
-//! (`Output.unsupported`), never approximated. See ARCHITECTURE.md §3-§5.
+//! (`Output.unsupported`), never approximated. See design.md.
 
 const std = @import("std");
 const lir = @import("lir");
