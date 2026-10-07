@@ -1,1 +1,0 @@
-Record := { a : Str }

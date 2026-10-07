@@ -66,8 +66,9 @@ check("short concat stays a string", type(rt.str_concat("ab", "cd")), "string")
 -- string: concatenation formats it straight into the buffer, and every other
 -- operation (through rt.str) formats it once. Interning millions of
 -- short-lived number strings made str_build's cost grow super-linearly in
--- LuaJIT's string table (ARCHITECTURE.md). Leaves must behave exactly like
--- the strings they stand for, as either operand and inside host values.
+-- LuaJIT's string table (docs/history/ARCHITECTURE.md §10). Leaves must behave
+-- exactly like the strings they stand for, as either operand and inside host
+-- values.
 local ffi = require("ffi")
 local int_cases = {
 	{ "u64_to_str", 0, "0" }, { "u64_to_str", 1234567, "1234567" }, { "u64_to_str", 2 ^ 53 - 1, "9007199254740991" },

@@ -1,3 +1,0 @@
-- Remove permissions if plugin has not been used for a long time.
-- Log plugin actions that require a permission.
-- Show plugin that is currently using a permission, e.g. roc-core is reading from folder /gitrepos/hello in status bar and with a scrollable log.

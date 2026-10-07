@@ -7,6 +7,7 @@
 # build's output. Build output goes to stderr; stdout is the protocol only.
 set -u
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+native_roc="${ROC_LUAJIT_NATIVE_ROC:-$root/zig-out/bin/roc-native}"
 here="$root/luajit_backend/bench/profile"
 program="${1:?usage: run PROGRAM time|steady|memory SIZES SEED}"
 kind="${2:?}" sizes="${3:?}" seed="${4:?}"
@@ -17,12 +18,12 @@ roc="$root/zig-out/bin/roc"
 
 # The compiler is a multi-gigabyte debug build here; hashing it on every spawn
 # cost seconds, so the cache key takes its size, mtime and inode instead.
-key="$( { stat -L -c "%s %Y %i" "$roc"; cat "$src"; } | sha256sum | cut -c1-16)"
+key="$( { stat -L -c "%s %Y %i" "$roc" "$native_roc"; cat "$src"; } | sha256sum | cut -c1-16)"
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/roc_luajit-profile/$program-$key"
 if [ ! -f "$cache/done" ]; then
 	mkdir -p "$cache"
 	"$roc" build --target=luajit --no-cache "$src" --output="$cache/app.lua" >"$cache/build.log" 2>&1 \
-		&& "$roc" build --opt=speed --no-cache "$src" --output="$cache/native" >>"$cache/build.log" 2>&1 \
+		&& "$native_roc" build --opt=speed --no-cache "$src" --output="$cache/native" >>"$cache/build.log" 2>&1 \
 		|| { echo "run: building $program failed" >&2; cat "$cache/build.log" >&2; exit 1; }
 	: >"$cache/done"
 fi

@@ -1,4 +1,2 @@
 #!/usr/bin/env bash
-# The LuaJIT backend suite alone (./test-all --luajit-only); the full suite,
-# with upstream's MiniCI, is ./test-all.
-exec "$(dirname "${BASH_SOURCE[0]}")/test-all" --luajit-only "$@"
+exec "$(dirname "${BASH_SOURCE[0]}")/test-all" "$@"

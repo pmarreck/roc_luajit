@@ -8,7 +8,7 @@ local W = dofile(src .. "wide.lua")
 local I = dofile(src .. "int128.lua")(W)
 local rt = assert(loadfile(src .. "runtime.lua"))(W, I, dofile(src .. "list.lua"), dofile(src .. "float.lua"), dofile(src .. "sort.lua"), dofile(src .. "numparse.lua"), dofile(src .. "fmath.lua"), dofile(src .. "simd.lua"), dofile(src .. "crypto.lua"))
 
--- Operand parsing and printing per representation (ARCHITECTURE.md §5).
+-- Operand parsing and printing per representation (design.md).
 local function parse_int64(s, ctype)
 	local negative = s:sub(1, 1) == "-"
 	local v = ffi.new(ctype, 0)
@@ -20,7 +20,7 @@ local function parse_signed_wide(s)
 	if s:sub(1, 1) == "-" then return W.neg(W.from_decimal(s:sub(2), 8)) end
 	return W.from_decimal(s, 8)
 end
--- I64/U64 operands (ARCHITECTURE.md §5) are int64_t/uint64_t cdata, or with
+-- I64/U64 operands (design.md) are int64_t/uint64_t cdata, or with
 -- ROC_LUAJIT_INT64_REPR=mixed Lua numbers whenever -2^53 < v < 2^53, as
 -- emitted code passes them. Either way every 64-bit result must be a valid
 -- representation of its type, or it shows as "badrepr:".

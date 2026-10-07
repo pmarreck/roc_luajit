@@ -1,0 +1,23 @@
+name: Downstream backend
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f
+      - run: ./test-luajit --portable
+  linux-hosts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f
+      - run: ./test-luajit

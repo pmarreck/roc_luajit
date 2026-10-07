@@ -17,6 +17,7 @@
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../../.." && pwd)"
+native_roc="${ROC_LUAJIT_NATIVE_ROC:-$root/zig-out/bin/roc-native}"
 roc="$root/zig-out/bin/roc"
 runs=10
 mult=1
@@ -66,7 +67,7 @@ for src in startup fib dec_math dict_ops list_ops str_build; do
 	[ "$src" = startup ] || scale=$((scale * mult))
 	d="$work/$src"
 	mkdir -p "$d"
-	"$roc" build --opt=speed --no-cache "$root/luajit_backend/bench/$src.roc" --output="$d/native" >/dev/null 2>&1 || { echo "$src: native build failed" >&2; continue; }
+	"$native_roc" build --opt=speed --no-cache "$root/luajit_backend/bench/$src.roc" --output="$d/native" >/dev/null 2>&1 || { echo "$src: native build failed" >&2; continue; }
 	"$roc" build --target=luajit --no-cache "$root/luajit_backend/bench/$src.roc" --output="$d/app.lua" >/dev/null 2>&1 || { echo "$src: LuaJIT build failed" >&2; continue; }
 	declare -A cmd=(
 		[native]="$d/native"

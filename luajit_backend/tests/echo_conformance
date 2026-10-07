@@ -16,6 +16,10 @@
 # natively (for corpora known to build, such as the vendored demos).
 set -u
 
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+native_roc="${ROC_LUAJIT_NATIVE_ROC:-$root/zig-out/bin/roc-native}"
+
 # Strip the native runtime's backtrace: keep a crash report up to the blank
 # line that ends its message.
 strip_trailer() {
@@ -38,7 +42,7 @@ if [ "${1:-}" = "--one" ]; then
 	name="$(basename "$f" .roc)"
 	d="$work/$(printf %s "$f" | sha256sum | cut -c1-16)"
 	mkdir -p "$d"
-	(cd "$d" && timeout 300 "$roc" build --opt=dev --no-cache "$f" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err") 2>"$d/nb.shell"; nb=$?
+	(cd "$d" && timeout 300 "$native_roc" build --opt=dev --no-cache "$f" --output="$d/native" >"$d/nb.out" 2>"$d/nb.err") 2>"$d/nb.shell"; nb=$?
 	if ! built "$nb" "$d/nb.out" "$d/nb.err"; then
 		echo skipped >"$d/verdict"
 		exit 0
@@ -67,8 +71,6 @@ if [ "${1:-}" = "--one" ]; then
 	exit 0
 fi
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(cd "$here/../.." && pwd)"
 roc="$root/zig-out/bin/roc"
 max_unsupported=""
 max_skipped=""

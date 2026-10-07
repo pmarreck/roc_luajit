@@ -1,47 +1,21 @@
 #!/usr/bin/env bash
-# Build the Roc compiler for the LuaJIT backend work, through the pinned Nix
-# dev shell and under the Zig CPU-affinity cap.
-set -u
-
+# Build the downstream CLI and its own test tools in the pinned development shell.
+set -eu
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$root/luajit_backend/scripts/zig_cpu_cap.bash"
-
-usage() {
-	cat <<'USAGE'
-Usage: ./build [--debug | --test] [--dry-run] [-- extra zig build args]
-
-  (default)   zig build roc -Doptimize=ReleaseFast
-  --debug     zig build roc -Doptimize=Debug
-  --test      zig build build-ci (every binary MiniCI runs)
-  --dry-run   print the command instead of running it
-
-Environment:
-  ROC_LUAJIT_ZIG_CPUS  CPUs Zig may use (default 32, clamped to the host).
-                       Zig 0.16.0 segfaults compiling roc on many-core hosts.
-USAGE
-}
-
-mode=release
+steps=(roc -Doptimize=ReleaseFast)
 dry_run=0
 extra=()
 while [ $# -gt 0 ]; do
-	case "$1" in
-		--debug) mode=debug ;;
-		--test) mode=test ;;
-		--dry-run) dry_run=1 ;;
-		-h | --help) usage; exit 0 ;;
-		--) shift; extra=("$@"); break ;;
-		*) echo "error: unknown option '$1' (see ./build --help)" >&2; exit 2 ;;
-	esac
-	shift
+    case "$1" in
+        --debug) steps=(roc -Doptimize=Debug) ;;
+        --test) steps=(roc test build-test-luajit-differential native) ;;
+        --dry-run) dry_run=1 ;;
+        --) shift; extra=("$@"); break ;;
+        -h|--help) echo 'Usage: ./build [--debug|--test] [--dry-run] [-- extra zig build args]'; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
 done
-
-cpus="$(zig_cpu_list)" || exit 2
-case "$mode" in
-	release) step="roc -Doptimize=ReleaseFast" ;;
-	debug) step="roc -Doptimize=Debug" ;;
-	test) step="build-ci" ;;
-esac
-
-cd "$root" || exit 1
-run_or_print "nix develop -c taskset -c $cpus zig build $step ${extra[*]-}"
+cd "$root"
+command=(nix develop -c zig build "${steps[@]}" -j2 ${extra[@]+"${extra[@]}"})
+if [ "$dry_run" -eq 1 ]; then printf '%q ' "${command[@]}"; printf '\n'; else exec "${command[@]}"; fi
